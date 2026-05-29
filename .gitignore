@@ -1,0 +1,10 @@
+*.qcow2
+result
+
+.venv/
+__pycache__/
+scapy
+
+target
+
+.nixos-test-history
