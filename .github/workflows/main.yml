@@ -1,0 +1,70 @@
+name: Report tests
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  discover-reports:
+    name: Discover report flakes
+    runs-on: ubuntu-latest
+    outputs:
+      reports: ${{ steps.reports.outputs.reports }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Collect reports
+        id: reports
+        run: |
+          reports="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_dirs = {
+              path.parent
+              for pattern in ("*/flake.nix", "*/default.nix")
+              for path in Path("cves").glob(pattern)
+          }
+          paths = sorted(str(path) for path in report_dirs)
+          print(json.dumps(paths))
+          PY
+          )"
+          echo "reports=${reports}" >> "${GITHUB_OUTPUT}"
+
+  report-tests:
+    name: ${{ matrix.report }}
+    needs:
+      - discover-reports
+    if: ${{ needs.discover-reports.outputs.reports != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        report: ${{ fromJson(needs.discover-reports.outputs.reports) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+
+      - name: Build and run vulnerable test
+        run: |
+          if [ -f "./${{ matrix.report }}/flake.nix" ]; then
+            nix run "./${{ matrix.report }}#testVulnerableTrue.driver" \
+              --print-build-logs
+          elif [ -f "./${{ matrix.report }}/default.nix" ]; then
+            nix-build "./${{ matrix.report }}/default.nix" -A testVulnerableTrue
+            ./result/bin/nixos-test-driver
+          fi
