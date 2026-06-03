@@ -62,7 +62,7 @@ jobs:
       - name: Build and run vulnerable test
         run: |
           if [ -f "./${{ matrix.report }}/flake.nix" ]; then
-            nix run "./${{ matrix.report }}#testVulnerableTrue.driver" \
+            nix run "./${{ matrix.report }}#testVulnerableTrue" \
               --print-build-logs
           elif [ -f "./${{ matrix.report }}/default.nix" ]; then
             nix-build "./${{ matrix.report }}/default.nix" -A testVulnerableTrue
