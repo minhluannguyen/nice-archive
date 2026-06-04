@@ -5,7 +5,9 @@ let
   arrBody = pkgs.lib.concatStringsSep "\n  " (pkgs.lib.mapAttrsToList mkPair oldKernelVMs);
 
 in
-pkgs.runCommand "nixos-old-kernel-test" { } ''
+pkgs.runCommand "nixos-old-kernel-test" { 
+  meta.mainProgram = "nixos-test-driver";
+ } ''
   outBin=$out/bin
   mkdir -p "$outBin"
 
