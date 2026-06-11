@@ -50,48 +50,6 @@ def warning(msg: str):
     """Print warning message"""
     print(f"{YELLOW}⚠️{NC} {msg}")
 
-
-def _collect_flake_outputs(node, outputs=None, current_name=None):
-    if outputs is None:
-        outputs = set()
-
-    if not isinstance(node, dict):
-        return outputs
-
-    if "type" in node:
-        if current_name is not None:
-            outputs.add(current_name)
-        return outputs
-
-    for key, value in node.items():
-        if key in {"packages", "apps", "checks", "legacyPackages"} and isinstance(value, dict):
-            _collect_flake_outputs(value, outputs, current_name)
-        elif isinstance(value, dict):
-            _collect_flake_outputs(value, outputs, key)
-
-    return outputs
-
-
-def resolve_test_output(case_dir: Path, isVulnerable: bool) -> str:
-    legacy = f"testVulnerable{'True' if isVulnerable else 'False'}"
-
-    result = subprocess.run(
-        ["nix", "flake", "show", "--json"],
-        cwd=case_dir,
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode == 0 and result.stdout.strip():
-        try:
-            available_outputs = _collect_flake_outputs(json.loads(result.stdout))
-            if legacy in available_outputs:
-                return legacy
-        except Exception:
-            pass
-
-    return preferred
-
 def run_single_test(case_dir: Path, isVulnerable: bool = True):
     """Run test for a single case"""
     case_name = case_dir.name
@@ -99,21 +57,22 @@ def run_single_test(case_dir: Path, isVulnerable: bool = True):
     print()
     
     try:
-        test_output = resolve_test_output(case_dir, isVulnerable)
+        vulnerable_str = "true" if isVulnerable else "false"
+        result = subprocess.run(
+            ["nix", "run", f".#test-vulnerable-{vulnerable_str}-{systemStr}"],
+            cwd=case_dir,
+            # capture_output=True,
+            text=True,
+        )
 
-        if isVulnerable:
+        # To handle legacy test output that have not been updated to use the new nice-archive library. Will be removed in the future.
+        if result.returncode != 0:
+            warning(f"Primary test command failed, retrying with legacy output for {case_name}")
             result = subprocess.run(
-                ["nix", "run", f".#{test_output}"],
+                ["nix", "run", f".#testVulnerable{vulnerable_str.capitalize()}"],
                 cwd=case_dir,
                 # capture_output=True,
-                text=True
-            )
-        else:
-            result = subprocess.run(
-                ["nix", "run", f".#{test_output}"],
-                cwd=case_dir,
-                # capture_output=True,
-                text=True
+                text=True,
             )
         
         if result.returncode == 0:
@@ -219,6 +178,230 @@ def run_tests():
     
     show_main_menu()
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+def strip_ansi(s: str) -> str:
+    s = ANSI_RE.sub("", s)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return s
+
+def read_until_clean(child, needle: str, timeout: float = 120.0) -> str:
+    deadline = time.time() + timeout
+    raw_parts = []
+    clean_buf = ""
+
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(size=4096, timeout=1)
+        except pexpect.TIMEOUT:
+            continue
+
+        raw_parts.append(chunk)
+        clean_buf += strip_ansi(chunk)
+
+        if needle in clean_buf:
+            return clean_buf
+
+    raise TimeoutError(f"Did not see cleaned text: {needle!r}")
+
+# Start interactive scenario section
+def start_scenario():
+    """Start scenario for a single case"""
+    info("Starting scenario for a report case...")
+    print()
+    
+    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() and ((d / "flake.nix") or (d / "default.nix")).exists()])
+
+    if not cases:
+        error("No valid reports found")
+    
+    cases.append("Cancel")
+
+    choice = inquirer.fuzzy(
+        message="Select CVE case to test:",
+        choices= cases,
+        multiselect=True,
+        match_exact=False,
+    ).execute()
+    
+    selected = choice[0] if choice else "Cancel"
+    
+    if selected == "Cancel":
+        show_main_menu()
+        return
+    
+    choice = questionary.select(
+        message="Vulnerable or non-vulnerable scenario?",
+        choices=[
+            "Vulnerable",
+            "Non-Vulnerable",
+            "Cancel"
+        ],
+        qmark="?",
+        pointer="→",
+        default="Vulnerable"
+    ).ask()
+
+    if choice == "Cancel":
+        show_main_menu()
+        return
+    
+    case_dir = REPORT_DIR / selected
+    
+    try:
+        subprocess.run(["bash", LIBRARY_DIR / "cleanup-script.sh"], capture_output=True)
+    except Exception:
+        pass
+  
+    # Extract VM names from flake
+    info("Extracting VM names from flake...")
+    try:
+        subprocess.run(["git", "add", case_dir], cwd=USER_DIR, capture_output=True)
+
+        if choice == "Vulnerable":
+            child = pexpect.spawn(
+                f"nix run .#start-scenario-vulnerable-true-{systemStr}",
+                cwd=str(case_dir),
+                encoding="utf-8",
+                echo=False
+            )
+        else:
+            child = pexpect.spawn(
+                f"nix run .#start-scenario-vulnerable-false-{systemStr}",
+                cwd=str(case_dir),
+                encoding="utf-8",
+                echo=False
+            )
+
+        # Log output to our terminal
+        child.logfile_read = sys.stdout
+
+        clean_text = read_until_clean(
+            child,
+            "additionally exposed symbols:",
+            timeout=120,
+        )
+
+        ssh_commands = dict(re.findall(
+            r"^\s*([A-Za-z0-9._-]+):\s+(ssh\b[^\r\n]+)$",
+            clean_text,
+            re.MULTILINE,
+        ))
+
+        child.sendline("test_script()")
+
+        post_text = read_until_clean(
+            child,
+            "INTERACTIVE MODE SETUP COMPLETE. READY FOR INTERACTIVE TESTING.",
+            timeout=120,
+        )
+
+        if len(ssh_commands) == 0:
+            raise RuntimeError("Did not find any SSH commands in the output. Maybe there is no VM available?")
+        
+
+        terminator_cmds = []
+        for name, cmd in ssh_commands.items():
+            terminator_cmds.append(f'terminator -T {name} -e "{cmd}"')
+
+        full_cmd = " & ".join(terminator_cmds)
+
+        time.sleep(2)  # Give some time for the child process to set up before launching terminator
+        
+        subprocess.Popen(
+            ["bash", "-c", full_cmd],
+            cwd=case_dir,
+        )
+        
+        info(f"{GREEN}To access the machines, use the following SSH commands:{NC}")
+        for name, cmd in ssh_commands.items():
+            print(f"  - {name}: {cmd}")
+
+        info(f"{RED}To exit the scenario, press Ctrl+D in this terminal and choose 'Yes' to kill the VMs.{NC}")
+
+        child.logfile = None
+        child.logfile_read = None
+        child.logfile_send = None
+        child.interact()
+
+
+    except Exception as e:
+        error(f"Could not start scenario: {e}")
+    
+    show_main_menu()
+
+def run_standalone_vms():
+    """Run standalone VM machines"""
+    info("Running standalone VM machines...")
+    
+    print()
+    
+    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() and ((d / "flake.nix") or (d / "default.nix")).exists()])
+
+    if not cases:
+        error("No valid reports found")
+    
+    cases.append("Cancel")
+
+    choice = inquirer.fuzzy(
+        message="Select CVE case to test:",
+        choices= cases,
+        multiselect=True,
+        match_exact=False,
+    ).execute()
+    
+    selected = choice[0] if choice else "Cancel"
+    
+    if selected == "Cancel":
+        show_main_menu()
+        return
+    
+
+    print(f"{BLUE}Scanning for available VMs...{NC}")
+
+    case_dir = REPORT_DIR / selected
+    try:
+        result = subprocess.run(
+            ["nix", "eval", "--json", ".#standaloneVMs"],
+            cwd=case_dir,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            error(f"Failed to get available VMs: {result.stderr}")
+        
+        vm_data = json.loads(result.stdout)
+        vm_names = list(vm_data.keys())
+        if not vm_names:
+            error("No standalone VMs found for this case.")
+    except Exception as e:
+        error(f"Error getting available VMs: {e}")
+
+    choice = questionary.select(
+        message="Select a VM to run:",
+        choices= vm_names + ["Cancel"],
+        qmark="?",
+        pointer="→",
+    ).ask()
+
+    if choice == "Cancel":
+        show_main_menu()
+        return
+    
+    selected_vm = vm_data[choice]
+    info(f"Press Ctrl + A + X to exit the VM and return to the menu.")
+    info(f"Starting VM: {choice}...")
+    try:
+        subprocess.run(
+            ["nix", "run", f".#standaloneVMs.{choice}"],
+            cwd=case_dir,
+        )
+    except Exception as e:
+        error(f"Error starting VM: {e}")
+
+    show_main_menu()
+
 def show_main_menu():
     """Display main menu"""
 
@@ -237,15 +420,21 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
     choice = questionary.select(
         message="What would you like to do?",
         choices=[
+            "Start interactive scenario",
             "Run tests",
+            "Run standalone VM machines",
             "Exit"
         ],
         qmark="?",
         pointer="→",
     ).ask()
     
-    if choice == "Run tests":
+    if choice == "Start interactive scenario":
+        start_scenario()
+    elif choice == "Run tests":
         run_tests()
+    elif choice == "Run standalone VM machines":
+        run_standalone_vms()
     elif choice == "Exit":
         print("Goodbye!")
         sys.exit(0)
