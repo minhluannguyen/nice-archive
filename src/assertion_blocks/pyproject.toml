@@ -1,0 +1,18 @@
+[project]
+name = "assertion_blocks"
+version = "1.0"
+description = "Assertion blocks for NixOS test framework"
+dependencies = []
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+assertion_blocks = ["py.typed"]
+
+[tool.setuptools.packages.find]
+include = ["*"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
