@@ -8,6 +8,7 @@ import sys
 import subprocess
 import json
 import re
+import argparse
 from pathlib import Path
 import time
 import pexpect
@@ -27,7 +28,13 @@ REPORT_DIR = USER_DIR / "cves"
 
 LIBRARY_DIR = Path(__file__).parent
 
-systemStr = "x86_64-linux" if sys.platform.startswith("linux") else "aarch64-darwin" if sys.platform == "darwin" else error(f"Unsupported platform: {sys.platform}")
+if sys.platform.startswith("linux"):
+    systemStr = "x86_64-linux"
+elif sys.platform == "darwin":
+    systemStr = "aarch64-darwin"
+else:
+    print(f"{RED}❌{NC} Unsupported platform: {sys.platform}", file=sys.stderr)
+    sys.exit(1)
 
 def info(msg: str):
     """Print info message"""
@@ -49,6 +56,142 @@ def warning(msg: str):
     """Print warning message"""
     print(f"{YELLOW}⚠️{NC} {msg}")
 
+ALL_CASES = "__all_cases__"
+
+def wait_for_enter():
+    """Pause when returning to the interactive menu."""
+    try:
+        input("\nPress Enter to return to menu...")
+    except EOFError:
+        pass
+
+def has_nix_entry(case_dir: Path) -> bool:
+    """Return whether a case has a flake.nix or default.nix entry point."""
+    return (case_dir / "flake.nix").exists() or (case_dir / "default.nix").exists()
+
+def list_case_dirs(require_nix_entry: bool = False) -> list[Path]:
+    """List report case directories."""
+    if not REPORT_DIR.exists():
+        return []
+
+    cases = [d for d in REPORT_DIR.iterdir() if d.is_dir()]
+
+    if require_nix_entry:
+        cases = [d for d in cases if has_nix_entry(d)]
+
+    return sorted(cases)
+
+def resolve_case(case: str, require_nix_entry: bool = False) -> Path:
+    """Resolve a case name or path to a case directory."""
+    candidate = Path(case).expanduser()
+
+    if not candidate.is_absolute():
+        report_candidate = REPORT_DIR / case
+        if report_candidate.exists():
+            candidate = report_candidate
+
+    if candidate.exists():
+        if not candidate.is_dir():
+            error(f"Case path is not a directory: {candidate}")
+        if require_nix_entry and not has_nix_entry(candidate):
+            error(f"No flake.nix or default.nix found in case directory: {candidate}")
+        return candidate
+
+    cases = list_case_dirs(require_nix_entry=require_nix_entry)
+    exact_matches = [d for d in cases if d.name == case]
+    casefold_matches = [d for d in cases if d.name.casefold() == case.casefold()]
+    partial_matches = [d for d in cases if case.casefold() in d.name.casefold()]
+
+    matches = exact_matches or casefold_matches or partial_matches
+
+    if not matches:
+        error(f"Could not find case: {case}")
+
+    if len(matches) > 1:
+        names = ", ".join(d.name for d in matches)
+        error(f"Case name is ambiguous: {case}. Matches: {names}")
+
+    return matches[0]
+
+def resolve_named_choice(name: str, choices: list[str], label: str) -> str:
+    """Resolve an exact, case-insensitive, or unique partial name."""
+    if name in choices:
+        return name
+
+    casefold_matches = [choice for choice in choices if choice.casefold() == name.casefold()]
+    partial_matches = [choice for choice in choices if name.casefold() in choice.casefold()]
+    matches = casefold_matches or partial_matches
+
+    if not matches:
+        error(f"Could not find {label}: {name}")
+
+    if len(matches) > 1:
+        error(f"{label.capitalize()} name is ambiguous: {name}. Matches: {', '.join(matches)}")
+
+    return matches[0]
+
+def prompt_case(message: str, include_all: bool = False, require_nix_entry: bool = False) -> Path | str | None:
+    """Prompt for a case, optionally including an all-cases choice."""
+    cases = [d.name for d in list_case_dirs(require_nix_entry=require_nix_entry)]
+
+    if not cases:
+        error("No valid report cases found")
+
+    choices = cases[:]
+    if include_all:
+        choices.append("All cases")
+    choices.append("Cancel")
+
+    selected = inquirer.fuzzy(
+        message=message,
+        choices=choices,
+        multiselect=True,
+        match_exact=False,
+    ).execute()
+
+    selected_case = selected[0] if selected else "Cancel"
+
+    if selected_case == "Cancel":
+        return None
+
+    if selected_case == "All cases":
+        return ALL_CASES
+
+    return resolve_case(selected_case, require_nix_entry=require_nix_entry)
+
+def prompt_vulnerability() -> bool | None:
+    """Prompt for vulnerable or non-vulnerable scenario."""
+    choice = questionary.select(
+        message="Vulnerable or non-vulnerable scenario?",
+        choices=[
+            "Vulnerable",
+            "Non-Vulnerable",
+            "Cancel"
+        ],
+        qmark="?",
+        pointer="→",
+        default="Vulnerable"
+    ).ask()
+
+    if choice == "Cancel":
+        return None
+
+    return choice == "Vulnerable"
+
+def get_start_point(case_dir: Path) -> str:
+    """Return the Nix entry point type for a case."""
+    if (case_dir / "flake.nix").exists():
+        return "flake"
+    if (case_dir / "default.nix").exists():
+        return "default"
+    error("No flake.nix or default.nix found in case directory")
+
+def print_command_tail(result: subprocess.CompletedProcess):
+    """Print the useful tail of a captured failed command."""
+    output = result.stderr or result.stdout or ""
+    if output:
+        print(output[-500:])
+
 def clean_output(case_dir: Path):
     """Clean previous test outputs"""
     try:
@@ -56,7 +199,14 @@ def clean_output(case_dir: Path):
     except Exception as e:
         warning(f"Error during cleanup: {e}")
 
-def run_single_test(case_dir: Path, isVulnerable: bool = True):
+def run_single_test(
+    case_dir: Path,
+    isVulnerable: bool = True,
+    pause: bool = False,
+    refresh: bool = False,
+    show_output: bool = True,
+    system: str = systemStr,
+) -> bool:
     """Run test for a single case"""
     case_name = case_dir.name
     info(f"Testing: {case_name}")
@@ -65,22 +215,17 @@ def run_single_test(case_dir: Path, isVulnerable: bool = True):
     info("Cleaning previous test outputs...")
     clean_output(case_dir)
 
-    start_point = "flake" 
-    if (case_dir / "flake.nix").exists():
-        start_point = "flake"
-    elif (case_dir / "default.nix").exists():
-        start_point = "default"
-    else:
-        error("No flake.nix or default.nix found in case directory")
+    start_point = get_start_point(case_dir)
     
     try:
         vulnerable_str = "true" if isVulnerable else "false"
+        refresh_args = ["--refresh"] if refresh else []
 
         if start_point == "flake":
             result = subprocess.run(
-                ["nix", "run", f".#test-vulnerable-{vulnerable_str}-{systemStr}"],
+                ["nix", "run", *refresh_args, f".#test-vulnerable-{vulnerable_str}-{system}"],
                 cwd=case_dir,
-                # capture_output=True,
+                capture_output=not show_output,
                 text=True,
             )
 
@@ -88,38 +233,49 @@ def run_single_test(case_dir: Path, isVulnerable: bool = True):
             if result.returncode != 0:
                 warning(f"Primary test command failed, retrying with legacy output for {case_name}")
                 result = subprocess.run(
-                    ["nix", "run", f".#testVulnerable{vulnerable_str.capitalize()}"],
+                    ["nix", "run", *refresh_args, f".#testVulnerable{vulnerable_str.capitalize()}"],
                     cwd=case_dir,
-                    # capture_output=True,
+                    capture_output=not show_output,
                     text=True,
                 )
         else:
             result = subprocess.run(
                 ["nix-build", "default.nix", "-A", f"testVulnerable{vulnerable_str.capitalize()}"],
                 cwd=case_dir,
-                # capture_output=True,
+                capture_output=not show_output,
                 text=True,
             )
 
-            result = subprocess.run(
-                ["./result/bin/nixos-test-driver"],
-                cwd=case_dir,
-                # capture_output=True,
-                text=True,
-            )
+            if result.returncode == 0:
+                result = subprocess.run(
+                    ["./result/bin/nixos-test-driver"],
+                    cwd=case_dir,
+                    capture_output=not show_output,
+                    text=True,
+                )
         
         if result.returncode == 0:
             success(f"Test passed: {case_name}")
+            passed = True
         else:
             warning(f"Test failed: {case_name}")
-            print(result.stderr[-500:] if result.stderr else result.stdout[-500:])
+            print_command_tail(result)
+            passed = False
     except Exception as e:
         error(f"Error running test: {e}")
     
-    print("\nPress Enter to return to menu...")
-    input()
+    if pause:
+        wait_for_enter()
 
-def run_all_tests():
+    return passed
+
+def run_all_tests(
+    isVulnerable: bool = True,
+    pause: bool = False,
+    refresh: bool = True,
+    show_output: bool = False,
+    system: str = systemStr,
+) -> bool:
     """Run tests for all cases"""
     info("Running all tests...")
     print()
@@ -127,29 +283,19 @@ def run_all_tests():
     passed = 0
     failed = 0
     
-    cases = sorted([d for d in REPORT_DIR.iterdir() if d.is_dir()])
+    cases = list_case_dirs(require_nix_entry=True)
     
     for case_dir in cases:
-        case_name = case_dir.name
-        info(f"Testing: {case_name}")
-        
-        try:
-            test_output = resolve_test_output(case_dir, True)
-            result = subprocess.run(
-                ["nix", "run", "--refresh", f".#{test_output}"],
-                cwd=case_dir,
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                success(f"{case_name} passed")
-                passed += 1
-            else:
-                warning(f"{case_name} failed")
-                failed += 1
-        except Exception as e:
-            warning(f"Error running {case_name}: {e}")
+        if run_single_test(
+            case_dir,
+            isVulnerable=isVulnerable,
+            pause=False,
+            refresh=refresh,
+            show_output=show_output,
+            system=system,
+        ):
+            passed += 1
+        else:
             failed += 1
     
     print()
@@ -158,56 +304,36 @@ def run_all_tests():
     print(f"{RED}Failed: {failed}{NC}")
     print(f"{BLUE}═════════════════════════════════════════{NC}")
 
-    print("\nPress Enter to return to menu...")
-    input()
+    if pause:
+        wait_for_enter()
+
+    return failed == 0
 
 def run_tests():
     """Run tests menu"""
     info("Run report case tests...")
     print()
     
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() ])
-    
-    if not cases:
-        error("No report cases with report.yaml found")
-    
-    cases.extend(["All cases", "Cancel"])
-
-    choice = inquirer.fuzzy(
+    selected = prompt_case(
         message="Select CVE case to test:",
-        choices= cases,
-        multiselect=True,
-        match_exact=False,
-    ).execute()
+        include_all=True,
+        require_nix_entry=True,
+    )
 
-    selected = choice[0] if choice else "Cancel"
-
-    if selected == "Cancel":
+    if selected is None:
         show_main_menu()
         return
+
+    is_vulnerable = prompt_vulnerability()
     
-    if selected == "All cases":
-        run_all_tests()
+    if is_vulnerable is None:
+        show_main_menu()
+        return
+
+    if selected == ALL_CASES:
+        run_all_tests(isVulnerable=is_vulnerable, pause=True)
     else:
-        case_dir = REPORT_DIR / selected
-
-        choice = questionary.select(
-            message="Vulnerable or non-vulnerable scenario?",
-            choices=[
-                "Vulnerable",
-                "Non-Vulnerable",
-                "Cancel"
-            ],
-            qmark="?",
-            pointer="→",
-            default="Vulnerable"
-        ).ask()
-
-        if choice == "Cancel":
-            show_main_menu()
-            return
-
-        run_single_test(case_dir, isVulnerable=(choice == "Vulnerable"))
+        run_single_test(selected, isVulnerable=is_vulnerable, pause=True)
     
     show_main_menu()
 
@@ -238,75 +364,34 @@ def read_until_clean(child, needle: str, timeout: float = 120.0) -> str:
     raise TimeoutError(f"Did not see cleaned text: {needle!r}")
 
 # Start interactive scenario section
-def start_scenario():
-    """Start scenario for a single case"""
+def start_scenario_case(
+    case_dir: Path,
+    isVulnerable: bool = True,
+    system: str = systemStr,
+    popup: bool = True,
+) -> bool:
+    """Start scenario for a single case."""
     info("Starting scenario for a report case...")
     print()
-    
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() and ((d / "flake.nix") or (d / "default.nix")).exists()])
 
-    if not cases:
-        error("No valid reports found")
-    
-    cases.append("Cancel")
-
-    choice = inquirer.fuzzy(
-        message="Select CVE case to test:",
-        choices= cases,
-        multiselect=True,
-        match_exact=False,
-    ).execute()
-    
-    selected = choice[0] if choice else "Cancel"
-    
-    if selected == "Cancel":
-        show_main_menu()
-        return
-    
-    choice = questionary.select(
-        message="Vulnerable or non-vulnerable scenario?",
-        choices=[
-            "Vulnerable",
-            "Non-Vulnerable",
-            "Cancel"
-        ],
-        qmark="?",
-        pointer="→",
-        default="Vulnerable"
-    ).ask()
-
-    if choice == "Cancel":
-        show_main_menu()
-        return
-    
-    case_dir = REPORT_DIR / selected
-    
     try:
-        subprocess.run(["bash", LIBRARY_DIR / "cleanup-script.sh"], capture_output=True)
+        clean_output(case_dir)
     except Exception:
         pass
-  
-    # Extract VM names from flake
+
     info("Extracting VM names from flake...")
     try:
-        subprocess.run(["git", "add", case_dir], cwd=USER_DIR, capture_output=True)
+        subprocess.run(["git", "add", str(case_dir)], cwd=USER_DIR, capture_output=True)
 
-        if choice == "Vulnerable":
-            child = pexpect.spawn(
-                f"nix run .#start-scenario-vulnerable-true-{systemStr}",
-                cwd=str(case_dir),
-                encoding="utf-8",
-                echo=False
-            )
-        else:
-            child = pexpect.spawn(
-                f"nix run .#start-scenario-vulnerable-false-{systemStr}",
-                cwd=str(case_dir),
-                encoding="utf-8",
-                echo=False
-            )
+        vulnerable_str = "true" if isVulnerable else "false"
+        child = pexpect.spawn(
+            f"nix run .#start-scenario-vulnerable-{vulnerable_str}-{system}",
+            cwd=str(case_dir),
+            encoding="utf-8",
+            echo=False
+        )
 
-        # Log output to our terminal
+        # Log output to our terminal until the interactive setup finishes.
         child.logfile_read = sys.stdout
 
         clean_text = read_until_clean(
@@ -323,7 +408,7 @@ def start_scenario():
 
         child.sendline("test_script()")
 
-        post_text = read_until_clean(
+        read_until_clean(
             child,
             "INTERACTIVE MODE SETUP COMPLETE. READY FOR INTERACTIVE TESTING.",
             timeout=120,
@@ -331,21 +416,20 @@ def start_scenario():
 
         if len(ssh_commands) == 0:
             raise RuntimeError("Did not find any SSH commands in the output. Maybe there is no VM available?")
-        
 
-        terminator_cmds = []
-        for name, cmd in ssh_commands.items():
-            terminator_cmds.append(f'terminator -T {name} -e "{cmd}"')
+        time.sleep(2)  # Give the child process time to settle before launching terminals.
 
-        full_cmd = " & ".join(terminator_cmds)
+        if popup:
+            for name, cmd in ssh_commands.items():
+                try:
+                    subprocess.Popen(
+                        ["terminator", "-T", name, "-e", cmd],
+                        cwd=case_dir,
+                    )
+                except FileNotFoundError:
+                    warning("terminator is not available; use the SSH commands below manually.")
+                    break
 
-        time.sleep(2)  # Give some time for the child process to set up before launching terminator
-        
-        subprocess.Popen(
-            ["bash", "-c", full_cmd],
-            cwd=case_dir,
-        )
-        
         info(f"{GREEN}To access the machines, use the following SSH commands:{NC}")
         for name, cmd in ssh_commands.items():
             print(f"  - {name}: {cmd}")
@@ -356,86 +440,164 @@ def start_scenario():
         child.logfile_read = None
         child.logfile_send = None
         child.interact()
-
+        return True
 
     except Exception as e:
         error(f"Could not start scenario: {e}")
-    
-    show_main_menu()
 
-def run_standalone_vms():
-    """Run standalone VM machines"""
-    info("Running standalone VM machines...")
-    
-    print()
-    
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir()])
+def start_scenario():
+    """Start scenario for a single case from the interactive menu."""
+    selected = prompt_case(
+        message="Select CVE case to start:",
+        require_nix_entry=True,
+    )
 
-    if not cases:
-        error("No valid reports found")
-    
-    cases.append("Cancel")
-
-    choice = inquirer.fuzzy(
-        message="Select CVE case to test:",
-        choices= cases,
-        multiselect=True,
-        match_exact=False,
-    ).execute()
-    
-    selected = choice[0] if choice else "Cancel"
-    
-    if selected == "Cancel":
+    if selected is None:
         show_main_menu()
         return
-    
 
+    is_vulnerable = prompt_vulnerability()
+
+    if is_vulnerable is None:
+        show_main_menu()
+        return
+
+    start_scenario_case(selected, isVulnerable=is_vulnerable)
+    show_main_menu()
+
+def get_standalone_vm_data(case_dir: Path) -> dict:
+    """Return standalone VM metadata for a case."""
     print(f"{BLUE}Scanning for available VMs...{NC}")
 
-    case_dir = REPORT_DIR / selected
-    try:
+    if (case_dir / "flake.nix").exists():
         result = subprocess.run(
-            ["nix", "eval", "--json", ".#standaloneVMs"],
+            ["nix", "eval", "--json", ".#standaloneVMs", "--apply", "builtins.attrNames"],
             cwd=case_dir,
             capture_output=True,
             text=True
         )
 
-        if result.returncode != 0:
-            error(f"Failed to get available VMs: {result.stderr}")
-        
-        vm_data = json.loads(result.stdout)
-        vm_names = list(vm_data.keys())
-        if not vm_names:
-            error("No standalone VMs found for this case.")
-    except Exception as e:
-        error(f"Error getting available VMs: {e}")
+        if result.returncode == 0:
+            vm_names = json.loads(result.stdout)
+            if not vm_names:
+                error("No standalone VMs found for this case.")
+            return {
+                "kind": "flake-standalone",
+                "names": vm_names,
+            }
 
+        if not (case_dir / "default.nix").exists():
+            error(f"Failed to get available VMs: {result.stderr}")
+
+    if (case_dir / "default.nix").exists():
+        try:
+            result = subprocess.run(
+                ["nix-instantiate", "--eval", "--json", "--expr", "builtins.attrNames (import ./default.nix)"],
+                cwd=case_dir,
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode != 0:
+                error(f"Failed to get available VMs: {result.stderr}")
+
+            vm_names = [
+                name for name in json.loads(result.stdout)
+                if name.startswith("vm")
+            ]
+
+            if not vm_names:
+                error("No standalone VMs found for this case.")
+
+            return {
+                "kind": "default-nix",
+                "names": vm_names,
+            }
+        except Exception as e:
+            error(f"Error getting available VMs: {e}")
+
+    error("No flake.nix or default.nix found in case directory")
+
+def prompt_standalone_vm(vm_names: list[str]) -> str | None:
+    """Prompt for a standalone VM name."""
     choice = questionary.select(
         message="Select a VM to run:",
-        choices= vm_names + ["Cancel"],
+        choices=vm_names + ["Cancel"],
         qmark="?",
         pointer="→",
     ).ask()
 
     if choice == "Cancel":
-        show_main_menu()
-        return
-    
-    selected_vm = vm_data[choice]
-    info(f"Press Ctrl + A + X to exit the VM and return to the menu.")
-    info(f"Starting VM: {choice}...")
+        return None
+
+    return choice
+
+def run_standalone_vm(case_dir: Path, vm_name: str | None = None, allow_prompt: bool = True) -> bool:
+    """Run one standalone VM."""
+    info("Running standalone VM machine...")
+    print()
+
+    info("Cleaning previous VM outputs...")
+    clean_output(case_dir)
+
+    vm_data = get_standalone_vm_data(case_dir)
+    vm_names = vm_data["names"]
+
+    if vm_name is None:
+        if not allow_prompt:
+            error("--name is required when running a VM without prompts")
+        vm_name = prompt_standalone_vm(vm_names)
+
+    if vm_name is None:
+        return False
+
+    selected_vm = resolve_named_choice(vm_name, vm_names, "VM")
+
+    info("Press Ctrl + A + X to exit the VM and return to the menu.")
+    info(f"Starting VM: {selected_vm}...")
     try:
-        subprocess.run(
-            ["nix", "run", f".#standaloneVMs.{choice}"],
-            cwd=case_dir,
-        )
+        if vm_data["kind"] == "flake-standalone":
+            result = subprocess.run(
+                ["nix", "run", f".#standaloneVMs.{selected_vm}"],
+                cwd=case_dir,
+            )
+        else:
+            result = subprocess.run(
+                ["nix-build", "default.nix", "-A", selected_vm],
+                cwd=case_dir,
+            )
+
+            if result.returncode != 0:
+                return False
+
+            run_scripts = sorted((case_dir / "result" / "bin").glob("run-*-vm"))
+            if not run_scripts:
+                error("No VM launcher found under result/bin after nix-build")
+
+            result = subprocess.run(
+                [str(run_scripts[0])],
+                cwd=case_dir,
+            )
+
+        return result.returncode == 0
     except Exception as e:
         error(f"Error starting VM: {e}")
 
+def run_standalone_vms():
+    """Run standalone VM machines from the interactive menu."""
+    selected = prompt_case(
+        message="Select CVE case to test:",
+        require_nix_entry=True,
+    )
+
+    if selected is None:
+        show_main_menu()
+        return
+
+    run_standalone_vm(selected)
     show_main_menu()
 
-def update_flake_case(case_dir: Path):
+def update_flake_case(case_dir: Path) -> bool:
     """Update nix flake for a single case"""
     info(f"Updating nix flake for: {case_dir.name}")
     print()
@@ -450,53 +612,51 @@ def update_flake_case(case_dir: Path):
         
         if result.returncode == 0:
             success(f"Flake updated successfully: {case_dir.name}")
+            return True
         else:
             warning(f"Failed to update flake: {case_dir.name}")
-            print(result.stderr[-500:] if result.stderr else result.stdout[-500:])
+            print_command_tail(result)
+            return False
     except Exception as e:
         error(f"Error updating flake: {e}")
     
 
-def update_all_flakes():
+def update_all_flakes(pause: bool = False) -> bool:
     """Update nix flakes for all cases"""
     info("Updating nix flakes for all cases...")
     print()
     
-    cases = sorted([d for d in REPORT_DIR.iterdir() if d.is_dir()])
+    cases = list_case_dirs(require_nix_entry=True)
+    failed = 0
     
     for case_dir in cases:
-        update_flake_case(case_dir)
+        if not update_flake_case(case_dir):
+            failed += 1
     
-    print("\nPress Enter to return to menu...")
-    input()
+    if pause:
+        wait_for_enter()
+
+    return failed == 0
 
 def update_flakes():
     """Update nix flakes for existing cases"""
     info("Updating nix flakes for existing cases...")
     print()
     
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir()])
-    
-    if not cases:
-        error("No report cases found")
-    
-    cases.extend(["All cases", "Cancel"])
-    selected = inquirer.fuzzy(
+    selected = prompt_case(
         message="Select CVE case to test:",
-        choices= cases,
-        multiselect=True,
-        match_exact=False,
-    ).execute()
+        include_all=True,
+        require_nix_entry=True,
+    )
     
-    if selected == "Cancel":
+    if selected is None:
         show_main_menu()
         return
     
-    if selected == "All cases":
-        update_all_flakes()
+    if selected == ALL_CASES:
+        update_all_flakes(pause=True)
     else:
-        case_dir = REPORT_DIR / selected[0]
-        update_flake_case(case_dir)
+        update_flake_case(selected)
     show_main_menu()
 
 def show_main_menu():
@@ -539,16 +699,327 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
         print("Goodbye!")
         sys.exit(0)
 
+def parse_bool(value: str) -> bool:
+    """Parse a command-line boolean value."""
+    normalized = value.strip().casefold()
 
-def main():
+    if normalized in {"true", "t", "yes", "y", "1"}:
+        return True
+
+    if normalized in {"false", "f", "no", "n", "0"}:
+        return False
+
+    raise argparse.ArgumentTypeError("expected true or false")
+
+def add_case_args(parser: argparse.ArgumentParser, include_all: bool = False):
+    """Add case selection options to a command parser."""
+    parser.add_argument(
+        "--case",
+        dest="case_name",
+        help="case name or path, for example cve-2016-5195-dirty-cow",
+    )
+
+    if include_all:
+        parser.add_argument(
+            "--all",
+            action="store_true",
+            help="apply the command to all valid CVE cases",
+        )
+    else:
+        parser.set_defaults(all=False)
+
+def add_vulnerability_arg(parser: argparse.ArgumentParser):
+    """Add vulnerable/non-vulnerable selection to a command parser."""
+    parser.add_argument(
+        "--vulnerable",
+        type=parse_bool,
+        default=True,
+        metavar="{true,false}",
+        help="run the vulnerable variant: true or false (default: true)",
+    )
+
+def add_system_arg(parser: argparse.ArgumentParser):
+    """Add Nix system selection to a command parser."""
+    parser.add_argument(
+        "--system",
+        default=systemStr,
+        help=f"Nix system tag to use for generated outputs (default: {systemStr})",
+    )
+
+def add_no_prompt_arg(parser: argparse.ArgumentParser):
+    """Add the no-prompt option to a command parser."""
+    parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="fail instead of asking interactively for missing arguments",
+    )
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line interface."""
+    parser = argparse.ArgumentParser(
+        prog="nice-archive",
+        description="CLI tool for managing reproducible NICE Archive security reports.",
+    )
+
+    commands = parser.add_subparsers(dest="command", metavar="command")
+
+    start_parser = commands.add_parser(
+        "start",
+        help="open the interactive menu",
+        description="Open the interactive NICE Archive menu.",
+    )
+    start_parser.set_defaults(action="start", print_help_when_empty=False)
+
+    list_cves_parser = commands.add_parser(
+        "list-cves",
+        help="list available CVE cases",
+        description="List valid CVE case directories.",
+    )
+    list_cves_parser.set_defaults(action="list_cves", print_help_when_empty=False)
+
+    test_parser = commands.add_parser(
+        "test",
+        help="run CVE tests",
+        description="Run one CVE test or all CVE tests.",
+    )
+    add_case_args(test_parser, include_all=True)
+    add_vulnerability_arg(test_parser)
+    add_system_arg(test_parser)
+    add_no_prompt_arg(test_parser)
+    test_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="pass --refresh to nix run",
+    )
+    test_parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="show full command output for all-case test runs",
+    )
+    test_parser.set_defaults(action="test", print_help_when_empty=True, command_parser=test_parser)
+
+    scenario_parser = commands.add_parser(
+        "scenario",
+        help="start an interactive CVE scenario",
+        description="Start a CVE scenario and attach to the interactive test driver.",
+    )
+    add_case_args(scenario_parser)
+    add_vulnerability_arg(scenario_parser)
+    add_system_arg(scenario_parser)
+    add_no_prompt_arg(scenario_parser)
+    scenario_parser.add_argument(
+        "--popup",
+        type=parse_bool,
+        default=True,
+        metavar="{true,false}",
+        help="open terminator SSH windows after VMs are ready: true or false (default: true)",
+    )
+    scenario_parser.set_defaults(action="scenario", print_help_when_empty=True, command_parser=scenario_parser)
+
+    vm_parser = commands.add_parser(
+        "vm",
+        help="run a standalone VM",
+        description="Run a standalone VM for a CVE case.",
+    )
+    add_case_args(vm_parser)
+    add_no_prompt_arg(vm_parser)
+    vm_parser.add_argument(
+        "--name",
+        "--vm-name",
+        dest="vm_name",
+        help="standalone VM name to run",
+    )
+    vm_parser.set_defaults(action="vm", print_help_when_empty=True, command_parser=vm_parser)
+
+    list_vms_parser = commands.add_parser(
+        "list-vms",
+        help="list standalone VMs for a CVE case",
+        description="List standalone VM outputs for a CVE case.",
+    )
+    add_case_args(list_vms_parser)
+    add_no_prompt_arg(list_vms_parser)
+    list_vms_parser.set_defaults(action="list_vms", print_help_when_empty=True, command_parser=list_vms_parser)
+
+    update_parser = commands.add_parser(
+        "update-flakes",
+        aliases=["update"],
+        help="update flake.lock files",
+        description="Update flake.lock for one CVE case or all CVE cases.",
+    )
+    add_case_args(update_parser, include_all=True)
+    add_no_prompt_arg(update_parser)
+    update_parser.set_defaults(action="update_flakes", print_help_when_empty=True, command_parser=update_parser)
+
+    return parser
+
+def has_cli_action(args: argparse.Namespace) -> bool:
+    """Return whether a CLI action flag was selected."""
+    return getattr(args, "action", None) is not None
+
+def cli_vulnerability(args: argparse.Namespace) -> bool:
+    """Return the selected vulnerability variant, defaulting to vulnerable."""
+    return getattr(args, "vulnerable", True)
+
+def cli_case(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    message: str,
+    include_all: bool = False,
+    require_nix_entry: bool = True,
+) -> Path | str:
+    """Resolve a case from CLI args, prompting only when needed."""
+    case_name = getattr(args, "case_name", None)
+    all_cases = getattr(args, "all", False)
+    no_prompt = getattr(args, "no_prompt", False)
+
+    if case_name and all_cases:
+        parser.error("--case and --all cannot be used together")
+
+    if all_cases:
+        if include_all:
+            return ALL_CASES
+        parser.error("--all is not valid for this action")
+
+    if case_name:
+        return resolve_case(case_name, require_nix_entry=require_nix_entry)
+
+    if no_prompt:
+        parser.error("--case is required for this action")
+
+    selected = prompt_case(
+        message=message,
+        include_all=include_all,
+        require_nix_entry=require_nix_entry,
+    )
+
+    if selected is None:
+        sys.exit(0)
+
+    return selected
+
+def list_cases() -> bool:
+    """Print valid CVE case names."""
+    for case_dir in list_case_dirs(require_nix_entry=True):
+        print(case_dir.name)
+    return True
+
+def list_standalone_vms(case_dir: Path) -> bool:
+    """Print standalone VM names for a case."""
+    vm_data = get_standalone_vm_data(case_dir)
+    for vm_name in vm_data["names"]:
+        print(vm_name)
+    return True
+
+def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
+    """Run a non-menu command-line action."""
+    action = getattr(args, "action", None)
+
+    if action == "start":
+        show_main_menu()
+        return True
+
+    if action == "list_cves":
+        return list_cases()
+
+    if action == "list_vms":
+        case_dir = cli_case(
+            args,
+            parser,
+            message="Select CVE case to inspect:",
+            require_nix_entry=True,
+        )
+        return list_standalone_vms(case_dir)
+
+    if action == "scenario":
+        case_dir = cli_case(
+            args,
+            parser,
+            message="Select CVE case to start:",
+            require_nix_entry=True,
+        )
+        return start_scenario_case(
+            case_dir,
+            isVulnerable=cli_vulnerability(args),
+            system=args.system,
+            popup=args.popup,
+        )
+
+    if action == "test":
+        selected = cli_case(
+            args,
+            parser,
+            message="Select CVE case to test:",
+            include_all=True,
+            require_nix_entry=True,
+        )
+
+        if selected == ALL_CASES:
+            return run_all_tests(
+                isVulnerable=cli_vulnerability(args),
+                refresh=True,
+                show_output=args.show_output,
+                system=args.system,
+            )
+
+        return run_single_test(
+            selected,
+            isVulnerable=cli_vulnerability(args),
+            refresh=args.refresh,
+            show_output=True,
+            system=args.system,
+        )
+
+    if action == "vm":
+        case_dir = cli_case(
+            args,
+            parser,
+            message="Select CVE case to test:",
+            require_nix_entry=True,
+        )
+        return run_standalone_vm(
+            case_dir,
+            vm_name=args.vm_name,
+            allow_prompt=not args.no_prompt,
+        )
+
+    if action == "update_flakes":
+        selected = cli_case(
+            args,
+            parser,
+            message="Select CVE case to update:",
+            include_all=True,
+            require_nix_entry=True,
+        )
+
+        if selected == ALL_CASES:
+            return update_all_flakes()
+
+        return update_flake_case(selected)
+
+    parser.error("choose a command such as start, test, scenario, vm, update-flakes, list-cves, or list-vms")
+
+def main(argv: list[str] | None = None):
     """Main entry point"""
+    cli_args = sys.argv[1:] if argv is None else argv
+
     if not REPORT_DIR.exists():
         warning(f"Report directory not found, creating: {REPORT_DIR}")
         REPORT_DIR.mkdir(parents=True)
-    
-    show_main_menu()
+
+    parser = build_parser()
+    args = parser.parse_args(cli_args)
+
+    if not has_cli_action(args):
+        parser.print_help()
+        return
+
+    if len(cli_args) == 1 and getattr(args, "print_help_when_empty", False):
+        args.command_parser.print_help()
+        return
+
+    ok = run_cli(args, parser)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
     main()
-
