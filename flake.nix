@@ -13,13 +13,11 @@
       ];
 
       forAllSystems = nixpkgs.lib.genAttrs systems;
-    in
-    {
-      packages = forAllSystems (system:
+      forEachSystem = f: forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
 
-          packagedPython = pkgs.python312.withPackages (ps: with ps; [
+          pythonEnv = pkgs.python312.withPackages (ps: with ps; [
             jinja2
             pyyaml
             pexpect
@@ -28,16 +26,29 @@
             inquirerpy
           ]);
 
+          runtimePackages = with pkgs; [
+            nix
+            openssh
+            terminator
+          ];
+
+          runtimePath = pkgs.lib.makeBinPath runtimePackages;
+
           nice-archive = pkgs.writeShellScriptBin "nice-archive" ''
-            export PATH=${pkgs.nix}/bin:${pkgs.terminator}/bin:${pkgs.openssh}/bin:$PATH
-            
-            exec ${packagedPython}/bin/python ${self}/nice-archive.py "$@"
+            export PATH=${runtimePath}:$PATH
+
+            exec ${pythonEnv}/bin/python ${self}/nice-archive.py "$@"
           '';
         in
-        {
-          inherit nice-archive;
-          default = nice-archive;
+        f {
+          inherit pkgs pythonEnv runtimePackages nice-archive;
         });
+    in
+    {
+      packages = forEachSystem ({ nice-archive, ... }: {
+        inherit nice-archive;
+        default = nice-archive;
+      });
 
       apps = forAllSystems (system: {
         nice-archive = {
@@ -45,6 +56,20 @@
           program = "${self.packages.${system}.nice-archive}/bin/nice-archive";
         };
         default = self.apps.${system}.nice-archive;
+      });
+
+      devShells = forEachSystem ({ pkgs, pythonEnv, runtimePackages, ... }: {
+        default = pkgs.mkShell {
+          packages = [
+            pythonEnv
+            pkgs.git
+          ] ++ runtimePackages;
+
+          shellHook = ''
+            export NICE_ARCHIVE_ROOT="$PWD"
+            export PATH="$PWD:$PATH"
+          '';
+        };
       });
     };
 }

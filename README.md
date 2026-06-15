@@ -14,6 +14,7 @@ This repository contains a collection of **reproducible NixOS virtual machines a
 - [Nix package manager](https://nixos.org/download.html)
 - Flakes enabled
 - QEMU available on the host; KVM acceleration recommended
+- Optional: [direnv](https://direnv.net/) for automatic development shell activation; nix-direnv is recommended for faster Nix flake loading
 
 Enable flakes by adding the following lines to `/etc/nix/nix.conf`:
 
@@ -22,6 +23,67 @@ experimental-features = nix-command flakes
 ```
 
 See upstream docs: https://wiki.nixos.org/wiki/Flakes
+
+### Development shell
+
+This repository includes a flake development shell with the Python dependencies and runtime tools used by `nice-archive.py`.
+
+```bash
+nix develop
+```
+
+For automatic activation when entering the repository, install direnv, hook it into your shell, then allow this repo once:
+
+```bash
+# ~/.bashrc
+eval "$(direnv hook bash)"
+```
+
+For fish, use:
+
+```fish
+# ~/.config/fish/conf.d/direnv.fish
+direnv hook fish | source
+```
+
+Then allow this repository once:
+
+```bash
+cd /path/to/nice-archive
+direnv allow
+```
+
+After that, `cd` into the repo loads the same environment as `nix develop`.
+If direnv reports that `use flake` is unavailable, install nix-direnv or upgrade direnv.
+
+### CLI usage
+
+After entering the direnv shell, use `nice-archive` like a normal command-line tool:
+
+```bash
+nice-archive list-cves
+nice-archive test --case cve-2016-5195-dirty-cow --vulnerable true
+nice-archive test --all --vulnerable false
+nice-archive scenario --case cve-2016-5195-dirty-cow --vulnerable true --popup false
+nice-archive list-vms --case cve-2016-5195-dirty-cow
+nice-archive vm --case cve-2016-5195-dirty-cow --name vmVulnerableTrue
+nice-archive update-flakes --all
+```
+
+Switch into the interactive menu explicitly:
+
+```bash
+nice-archive start
+```
+
+If a required value is missing, the tool asks for it interactively. Add `--no-prompt` to make missing values fail instead.
+
+Without direnv, the same commands can be run through Nix:
+
+```bash
+nix run . -- list-cves
+nix run . -- test --case cve-2016-5195-dirty-cow --vulnerable true
+```
 
 ### Build & usage (reproducing experiments)
 

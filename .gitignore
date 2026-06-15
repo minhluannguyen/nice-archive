@@ -1,5 +1,6 @@
 *.qcow2
 result
+.direnv/
 
 .venv/
 __pycache__/
