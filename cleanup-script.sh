@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DIR="./cves"
+DIR="$1"
 
 find "$DIR" -type f -name "*.qcow2" -delete
 find "$DIR" -type l -name "*result" -delete

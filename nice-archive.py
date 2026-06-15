@@ -26,7 +26,6 @@ USER_DIR = Path.cwd()
 REPORT_DIR = USER_DIR / "cves"
 
 LIBRARY_DIR = Path(__file__).parent
-TEMPLATE_DIR = LIBRARY_DIR / "template"
 
 systemStr = "x86_64-linux" if sys.platform.startswith("linux") else "aarch64-darwin" if sys.platform == "darwin" else error(f"Unsupported platform: {sys.platform}")
 
@@ -50,26 +49,60 @@ def warning(msg: str):
     """Print warning message"""
     print(f"{YELLOW}⚠️{NC} {msg}")
 
+def clean_output(case_dir: Path):
+    """Clean previous test outputs"""
+    try:
+        subprocess.run(["bash", LIBRARY_DIR / "cleanup-script.sh", str(case_dir)], cwd=LIBRARY_DIR, capture_output=True)
+    except Exception as e:
+        warning(f"Error during cleanup: {e}")
+
 def run_single_test(case_dir: Path, isVulnerable: bool = True):
     """Run test for a single case"""
     case_name = case_dir.name
     info(f"Testing: {case_name}")
     print()
+
+    info("Cleaning previous test outputs...")
+    clean_output(case_dir)
+
+    start_point = "flake" 
+    if (case_dir / "flake.nix").exists():
+        start_point = "flake"
+    elif (case_dir / "default.nix").exists():
+        start_point = "default"
+    else:
+        error("No flake.nix or default.nix found in case directory")
     
     try:
         vulnerable_str = "true" if isVulnerable else "false"
-        result = subprocess.run(
-            ["nix", "run", f".#test-vulnerable-{vulnerable_str}-{systemStr}"],
-            cwd=case_dir,
-            # capture_output=True,
-            text=True,
-        )
 
-        # To handle legacy test output that have not been updated to use the new nice-archive library. Will be removed in the future.
-        if result.returncode != 0:
-            warning(f"Primary test command failed, retrying with legacy output for {case_name}")
+        if start_point == "flake":
             result = subprocess.run(
-                ["nix", "run", f".#testVulnerable{vulnerable_str.capitalize()}"],
+                ["nix", "run", f".#test-vulnerable-{vulnerable_str}-{systemStr}"],
+                cwd=case_dir,
+                # capture_output=True,
+                text=True,
+            )
+
+            # To handle legacy test output that have not been updated to use the new nice-archive library. Will be removed in the future.
+            if result.returncode != 0:
+                warning(f"Primary test command failed, retrying with legacy output for {case_name}")
+                result = subprocess.run(
+                    ["nix", "run", f".#testVulnerable{vulnerable_str.capitalize()}"],
+                    cwd=case_dir,
+                    # capture_output=True,
+                    text=True,
+                )
+        else:
+            result = subprocess.run(
+                ["nix-build", "default.nix", "-A", f"testVulnerable{vulnerable_str.capitalize()}"],
+                cwd=case_dir,
+                # capture_output=True,
+                text=True,
+            )
+
+            result = subprocess.run(
+                ["./result/bin/nixos-test-driver"],
                 cwd=case_dir,
                 # capture_output=True,
                 text=True,
@@ -94,7 +127,7 @@ def run_all_tests():
     passed = 0
     failed = 0
     
-    cases = sorted([d for d in REPORT_DIR.iterdir() if d.is_dir() and (d / "report.yaml").exists()])
+    cases = sorted([d for d in REPORT_DIR.iterdir() if d.is_dir()])
     
     for case_dir in cases:
         case_name = case_dir.name
@@ -133,7 +166,7 @@ def run_tests():
     info("Run report case tests...")
     print()
     
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() and ((d / "flake.nix") or (d / "default.nix")).exists()])
+    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() ])
     
     if not cases:
         error("No report cases with report.yaml found")
@@ -336,7 +369,7 @@ def run_standalone_vms():
     
     print()
     
-    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir() and ((d / "flake.nix") or (d / "default.nix")).exists()])
+    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir()])
 
     if not cases:
         error("No valid reports found")
@@ -402,6 +435,70 @@ def run_standalone_vms():
 
     show_main_menu()
 
+def update_flake_case(case_dir: Path):
+    """Update nix flake for a single case"""
+    info(f"Updating nix flake for: {case_dir.name}")
+    print()
+    
+    try:
+        result = subprocess.run(
+            ["nix", "flake", "update"],
+            cwd=case_dir,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            success(f"Flake updated successfully: {case_dir.name}")
+        else:
+            warning(f"Failed to update flake: {case_dir.name}")
+            print(result.stderr[-500:] if result.stderr else result.stdout[-500:])
+    except Exception as e:
+        error(f"Error updating flake: {e}")
+    
+
+def update_all_flakes():
+    """Update nix flakes for all cases"""
+    info("Updating nix flakes for all cases...")
+    print()
+    
+    cases = sorted([d for d in REPORT_DIR.iterdir() if d.is_dir()])
+    
+    for case_dir in cases:
+        update_flake_case(case_dir)
+    
+    print("\nPress Enter to return to menu...")
+    input()
+
+def update_flakes():
+    """Update nix flakes for existing cases"""
+    info("Updating nix flakes for existing cases...")
+    print()
+    
+    cases = sorted([d.name for d in REPORT_DIR.iterdir() if d.is_dir()])
+    
+    if not cases:
+        error("No report cases found")
+    
+    cases.extend(["All cases", "Cancel"])
+    selected = inquirer.fuzzy(
+        message="Select CVE case to test:",
+        choices= cases,
+        multiselect=True,
+        match_exact=False,
+    ).execute()
+    
+    if selected == "Cancel":
+        show_main_menu()
+        return
+    
+    if selected == "All cases":
+        update_all_flakes()
+    else:
+        case_dir = REPORT_DIR / selected[0]
+        update_flake_case(case_dir)
+    show_main_menu()
+
 def show_main_menu():
     """Display main menu"""
 
@@ -423,6 +520,7 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
             "Start interactive scenario",
             "Run tests",
             "Run standalone VM machines",
+            "Update flakes for CVE cases",
             "Exit"
         ],
         qmark="?",
@@ -435,6 +533,8 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
         run_tests()
     elif choice == "Run standalone VM machines":
         run_standalone_vms()
+    elif choice == "Update flakes for CVE cases":
+        update_flakes()
     elif choice == "Exit":
         print("Goodbye!")
         sys.exit(0)
