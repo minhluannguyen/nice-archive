@@ -2,7 +2,7 @@
 { config, pkgs, lib, modulesPath, ... }:
 
 let
-  templateMinimal = (import ./vm-minimal.nix { inherit isTest hostName isRetrictNetwork; }) { inherit pkgs lib modulesPath; };
+  templateMinimal = (import ./vm-minimal.nix { inherit isTest hostName isRetrictNetwork; }) { inherit pkgs config lib modulesPath; };
   # Handle both absolute paths and relative paths
   defaultConfigPath = if builtins.isPath configPath then
     configPath
@@ -19,7 +19,8 @@ in
     lib.optionals (!isTest) [
       "${modulesPath}/virtualisation/qemu-vm.nix"
     ]
-    ++ [
+    ++ 
+    [
       templateMinimal
       customConfig
     ];

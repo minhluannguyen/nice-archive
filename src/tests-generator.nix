@@ -94,7 +94,7 @@ let
   vulnerablePkgs = scenarioPkgs true;
   fixedPkgs = scenarioPkgs false;
   
-  mkTest = import ./test-template.nix;
+  mkTest = import ./test-configs/test-template.nix;
 
 in
   (if generateInteractiveTests then 

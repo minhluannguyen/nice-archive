@@ -104,7 +104,7 @@ let
       isRetrictNetwork = if value ? isRetrictNetwork then value.isRetrictNetwork else true;
       extraArgs = if value ? extraArgs then value.extraArgs else {};
     in
-      (import ./vm-configs/vm-template-instance.nix { 
+      (import ../vm-configs/vm-template-instance.nix { 
         isTest = true; 
         hostName = name; 
         isVulnerable = if variant == "invariant" then null else isVulnerable;
@@ -125,7 +125,7 @@ let
 
   testScript = if isInteractive then interactiveTestScript else (builtins.readFile testScriptPath);
 
-  assertionBlocksPkg = ps: import ./assertion_blocks/package.nix {
+  assertionBlocksPkg = ps: import ../assertion_blocks/package.nix {
     pkgs = testPkg;
     pythonPackages = ps;
   };
