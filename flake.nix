@@ -2,8 +2,9 @@
   description = "Run a Python script with nix run";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+  inputs.nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nixpkgs-unstable }:
     let
       systems = [
         "x86_64-linux"
@@ -16,6 +17,7 @@
       forEachSystem = f: forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          pkgsUnstableUnfree = import nixpkgs-unstable { inherit system; config.allowUnfree = true; };
 
           pythonEnv = pkgs.python312.withPackages (ps: with ps; [
             jinja2
@@ -41,7 +43,7 @@
           '';
         in
         f {
-          inherit pkgs pythonEnv runtimePackages nice-archive;
+          inherit pkgs pkgsUnstableUnfree pythonEnv runtimePackages nice-archive;
         });
     in
     {
@@ -58,11 +60,12 @@
         default = self.apps.${system}.nice-archive;
       });
 
-      devShells = forEachSystem ({ pkgs, pythonEnv, runtimePackages, ... }: {
+      devShells = forEachSystem ({ pkgs, pkgsUnstableUnfree, pythonEnv, runtimePackages, ... }: {
         default = pkgs.mkShell {
           packages = [
             pythonEnv
             pkgs.git
+            pkgsUnstableUnfree.github-copilot-cli
           ] ++ runtimePackages;
 
           shellHook = ''
