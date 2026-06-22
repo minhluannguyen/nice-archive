@@ -10,6 +10,16 @@ let
     cp -r $src/* $out/assertion_blocks/
     touch $out/assertion_blocks/py.typed
     mv $out/assertion_blocks/pyproject.toml $out/
+    cat > $out/setup.py <<'PY'
+    from setuptools import find_packages, setup
+
+    setup(
+        name="assertion_blocks",
+        version="1.0",
+        packages=find_packages(),
+        package_data={"assertion_blocks": ["py.typed"]},
+    )
+    PY
   '';
 in
 pythonPackages.buildPythonPackage {
