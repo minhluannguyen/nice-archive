@@ -11,7 +11,7 @@ let
   else
     caseDir + "/" + configPath;
   customConfig = if builtins.pathExists defaultConfigPath then
-    import defaultConfigPath ({ inherit isVulnerable isScenario pkgs config lib modulesPath; } // extraArgs)
+    import defaultConfigPath ({ inherit isTest isVulnerable isScenario pkgs config lib modulesPath; } // extraArgs)
   else throw "NixOS configuration file ${toString defaultConfigPath} not found.";
 in
 {
