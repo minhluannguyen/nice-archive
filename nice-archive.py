@@ -9,6 +9,7 @@ import subprocess
 import json
 import re
 import argparse
+import shlex
 from pathlib import Path
 import time
 import pexpect
@@ -57,6 +58,7 @@ def warning(msg: str):
     print(f"{YELLOW}⚠️{NC} {msg}")
 
 ALL_CASES = "__all_cases__"
+DEFAULT_TEST_LOG_TAIL_LINES = 100
 
 def wait_for_enter():
     """Pause when returning to the interactive menu."""
@@ -190,7 +192,90 @@ def print_command_tail(result: subprocess.CompletedProcess):
     """Print the useful tail of a captured failed command."""
     output = result.stderr or result.stdout or ""
     if output:
-        print(output[-500:])
+        print_log_output(output, full_log=False)
+
+def test_log_path(case_dir: Path, isVulnerable: bool, system: str) -> Path:
+    """Return the path where a test log should be saved."""
+    vulnerable_str = "true" if isVulnerable else "false"
+    safe_system = system.replace("/", "-")
+    return case_dir / f"test-vulnerable-{vulnerable_str}-{safe_system}.log"
+
+def format_command(command: list[str | Path]) -> str:
+    """Return a shell-readable command string for logs."""
+    return shlex.join(str(part) for part in command)
+
+def append_command_log(log_parts: list[str], command: list[str | Path], result: subprocess.CompletedProcess):
+    """Append a command and its combined output to the full test log."""
+    log_parts.append(f"$ {format_command(command)}\n")
+    log_parts.append(result.stdout or "")
+    if log_parts[-1] and not log_parts[-1].endswith("\n"):
+        log_parts.append("\n")
+    log_parts.append(f"[exit code: {result.returncode}]\n")
+
+def run_logged_command(
+    command: list[str | Path],
+    cwd: Path,
+    log_parts: list[str],
+    live_output: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run a command while capturing output, optionally printing it live."""
+    info(f"Running command: {format_command(command)}")
+
+    if live_output:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            bufsize=1,
+        )
+        output_parts = []
+
+        if process.stdout is not None:
+            for line in process.stdout:
+                output_parts.append(line)
+                print(line, end="", flush=True)
+
+        result = subprocess.CompletedProcess(
+            command,
+            process.wait(),
+            stdout="".join(output_parts),
+        )
+    else:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+        )
+
+    append_command_log(log_parts, command, result)
+    return result
+
+def save_test_log(log_path: Path, log_text: str):
+    """Persist the full captured test log."""
+    log_path.write_text(log_text, encoding="utf-8")
+
+def tail_lines(output: str, line_count: int = DEFAULT_TEST_LOG_TAIL_LINES) -> str:
+    """Return the last line_count lines from output."""
+    lines = output.splitlines()
+    if len(lines) <= line_count:
+        return output
+
+    tail = "\n".join(lines[-line_count:])
+    if output.endswith("\n"):
+        tail += "\n"
+    return tail
+
+def print_log_output(log_text: str, full_log: bool):
+    """Print either a full log or the configured tail."""
+    output = log_text if full_log else tail_lines(log_text)
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
 
 def clean_output(case_dir: Path):
     """Clean previous test outputs"""
@@ -199,12 +284,19 @@ def clean_output(case_dir: Path):
     except Exception as e:
         warning(f"Error during cleanup: {e}")
 
+def git_add_case(case_dir: Path):
+    """Add a case directory to git."""
+    try:
+        subprocess.run(["git", "add", str(case_dir)], cwd=USER_DIR, capture_output=True)
+    except Exception as e:
+        warning(f"Error adding case to git: {e}")
+
 def run_single_test(
     case_dir: Path,
     isVulnerable: bool = True,
     pause: bool = False,
     refresh: bool = False,
-    show_output: bool = True,
+    print_full_log: bool = False,
     system: str = systemStr,
 ) -> bool:
     """Run test for a single case"""
@@ -217,51 +309,74 @@ def run_single_test(
 
     start_point = get_start_point(case_dir)
     
+    vulnerable_str = "true" if isVulnerable else "false"
+    log_path = test_log_path(case_dir, isVulnerable, system)
+    log_parts: list[str] = []
+
     try:
-        vulnerable_str = "true" if isVulnerable else "false"
         refresh_args = ["--refresh"] if refresh else []
 
         if start_point == "flake":
-            result = subprocess.run(
-                ["nix", "run", *refresh_args, f".#test-vulnerable-{vulnerable_str}-{system}"],
+            git_add_case(case_dir)
+            command = ["nix", "run", *refresh_args, f".#test-vulnerable-{vulnerable_str}-{system}"]
+            result = run_logged_command(
+                command,
                 cwd=case_dir,
-                capture_output=not show_output,
-                text=True,
+                log_parts=log_parts,
+                live_output=print_full_log,
             )
 
             # To handle legacy test output that have not been updated to use the new nice-archive library. Will be removed in the future.
             if result.returncode != 0:
-                warning(f"Primary test command failed, retrying with legacy output for {case_name}")
-                result = subprocess.run(
-                    ["nix", "run", *refresh_args, f".#testVulnerable{vulnerable_str.capitalize()}"],
+                retry_message = f"Primary test command failed, retrying with legacy output for {case_name}"
+                warning(retry_message)
+                log_parts.append(f"\n# {retry_message}\n")
+                command = ["nix", "run", *refresh_args, f".#testVulnerable{vulnerable_str.capitalize()}"]
+                result = run_logged_command(
+                    command,
                     cwd=case_dir,
-                    capture_output=not show_output,
-                    text=True,
+                    log_parts=log_parts,
+                    live_output=print_full_log,
                 )
         else:
-            result = subprocess.run(
-                ["nix-build", "default.nix", "-A", f"testVulnerable{vulnerable_str.capitalize()}"],
+            command = ["nix-build", "default.nix", "-A", f"testVulnerable{vulnerable_str.capitalize()}"]
+            result = run_logged_command(
+                command,
                 cwd=case_dir,
-                capture_output=not show_output,
-                text=True,
+                log_parts=log_parts,
+                live_output=print_full_log,
             )
 
             if result.returncode == 0:
-                result = subprocess.run(
-                    ["./result/bin/nixos-test-driver"],
+                command = ["./result/bin/nixos-test-driver"]
+                result = run_logged_command(
+                    command,
                     cwd=case_dir,
-                    capture_output=not show_output,
-                    text=True,
+                    log_parts=log_parts,
+                    live_output=print_full_log,
                 )
-        
+
+        log_text = "".join(log_parts)
+        save_test_log(log_path, log_text)
+        info(f"Full test log saved to: {log_path}")
+
         if result.returncode == 0:
             success(f"Test passed: {case_name}")
             passed = True
         else:
             warning(f"Test failed: {case_name}")
-            print_command_tail(result)
             passed = False
+
+        if log_text and not print_full_log:
+            info(f"Printing last {DEFAULT_TEST_LOG_TAIL_LINES} lines of test output:")
+            print_log_output(log_text, full_log=print_full_log)
     except Exception as e:
+        if log_parts:
+            try:
+                save_test_log(log_path, "".join(log_parts))
+                warning(f"Partial test log saved to: {log_path}")
+            except Exception as log_error:
+                warning(f"Could not save partial test log: {log_error}")
         error(f"Error running test: {e}")
     
     if pause:
@@ -273,7 +388,7 @@ def run_all_tests(
     isVulnerable: bool = True,
     pause: bool = False,
     refresh: bool = True,
-    show_output: bool = False,
+    print_full_log: bool = False,
     system: str = systemStr,
 ) -> bool:
     """Run tests for all cases"""
@@ -291,7 +406,7 @@ def run_all_tests(
             isVulnerable=isVulnerable,
             pause=False,
             refresh=refresh,
-            show_output=show_output,
+            print_full_log=print_full_log,
             system=system,
         ):
             passed += 1
@@ -333,8 +448,8 @@ def run_tests():
     if selected == ALL_CASES:
         run_all_tests(isVulnerable=is_vulnerable, pause=True)
     else:
-        run_single_test(selected, isVulnerable=is_vulnerable, pause=True)
-    
+        run_single_test(selected, isVulnerable=is_vulnerable, pause=True, print_full_log=True)
+
     show_main_menu()
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -792,9 +907,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="pass --refresh to nix run",
     )
     test_parser.add_argument(
+        "--full-log",
+        action="store_true",
+        dest="print_full_log",
+        help=f"print the full test log instead of only the last {DEFAULT_TEST_LOG_TAIL_LINES} lines",
+    )
+    test_parser.add_argument(
         "--show-output",
         action="store_true",
-        help="show full command output for all-case test runs",
+        dest="print_full_log",
+        help=argparse.SUPPRESS,
     )
     test_parser.set_defaults(action="test", print_help_when_empty=True, command_parser=test_parser)
 
@@ -957,7 +1079,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             return run_all_tests(
                 isVulnerable=cli_vulnerability(args),
                 refresh=True,
-                show_output=args.show_output,
+                print_full_log=args.print_full_log,
                 system=args.system,
             )
 
@@ -965,7 +1087,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             selected,
             isVulnerable=cli_vulnerability(args),
             refresh=args.refresh,
-            show_output=True,
+            print_full_log=args.print_full_log,
             system=args.system,
         )
 
