@@ -9,3 +9,5 @@ scapy
 target
 
 .nixos-test-history
+
+*.log
