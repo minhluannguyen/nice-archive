@@ -4,7 +4,8 @@
   system ? "x86_64-linux",
   VMs ? {},
   testScriptPath,
-  generateInteractiveTests ? true
+  generateInteractiveTests ? true,
+  enableOCR ? false
 }:
 let
   pkgs = import nixpkgs { inherit system; };
@@ -102,13 +103,13 @@ in
       "start-scenario-vulnerable-true-${system}" = ((mkTest { 
         isInteractive = true;
         isVulnerable = true; 
-        inherit title caseDir VMs testScriptPath;
+        inherit title caseDir VMs testScriptPath enableOCR;
       }) { pkgs = vulnerablePkgs; lib = vulnerablePkgs.lib; }).driverInteractive;
 
       "start-scenario-vulnerable-false-${system}" = ((mkTest { 
         isInteractive = true;
         isVulnerable = false; 
-        inherit title caseDir VMs testScriptPath;
+        inherit title caseDir VMs testScriptPath enableOCR;
       }) { pkgs = fixedPkgs; lib = fixedPkgs.lib; }).driverInteractive;
     }
   else {}) // 
@@ -116,12 +117,12 @@ in
     "test-vulnerable-true-${system}" = ((mkTest { 
       isInteractive = false;
       isVulnerable = true; 
-      inherit title caseDir VMs testScriptPath;
+      inherit title caseDir VMs testScriptPath enableOCR;
     }) { pkgs = vulnerablePkgs; lib = vulnerablePkgs.lib; }).driver;
 
     "test-vulnerable-false-${system}" = ((mkTest { 
       isInteractive = false;
       isVulnerable = false; 
-      inherit title caseDir VMs testScriptPath;
+      inherit title caseDir VMs testScriptPath enableOCR;
     }) { pkgs = fixedPkgs; lib = fixedPkgs.lib; }).driver;
   }
