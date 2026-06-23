@@ -59,6 +59,10 @@ def warning(msg: str):
 
 ALL_CASES = "__all_cases__"
 DEFAULT_TEST_LOG_TAIL_LINES = 100
+LOG_LIVE = "live"
+LOG_FILE = "file"
+LOG_NONE = "none"
+LOG_MODES = {LOG_LIVE, LOG_FILE, LOG_NONE}
 
 def wait_for_enter():
     """Pause when returning to the interactive menu."""
@@ -192,10 +196,19 @@ def print_command_tail(result: subprocess.CompletedProcess):
     """Print the useful tail of a captured failed command."""
     output = result.stderr or result.stdout or ""
     if output:
-        print_log_output(output, full_log=False)
+        print_log_tail(output)
 
-def test_log_path(case_dir: Path, isVulnerable: bool, system: str) -> Path:
+def test_log_path(
+    case_dir: Path,
+    isVulnerable: bool,
+    system: str,
+    filename: str | None = None,
+) -> Path:
     """Return the path where a test log should be saved."""
+    if filename:
+        path = Path(filename).expanduser()
+        return path if path.is_absolute() else case_dir / path
+
     vulnerable_str = "true" if isVulnerable else "false"
     safe_system = system.replace("/", "-")
     return case_dir / f"test-vulnerable-{vulnerable_str}-{safe_system}.log"
@@ -216,48 +229,39 @@ def run_logged_command(
     command: list[str | Path],
     cwd: Path,
     log_parts: list[str],
-    live_output: bool = False,
+    log_mode: str,
 ) -> subprocess.CompletedProcess:
-    """Run a command while capturing output, optionally printing it live."""
+    """Run a command using the selected logging mode."""
     info(f"Running command: {format_command(command)}")
 
-    if live_output:
-        process = subprocess.Popen(
+    if log_mode == LOG_LIVE:
+        return subprocess.run(
             command,
             cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-            bufsize=1,
         )
-        output_parts = []
 
-        if process.stdout is not None:
-            for line in process.stdout:
-                output_parts.append(line)
-                print(line, end="", flush=True)
-
-        result = subprocess.CompletedProcess(
-            command,
-            process.wait(),
-            stdout="".join(output_parts),
-        )
-    else:
-        result = subprocess.run(
+    if log_mode == LOG_NONE:
+        return subprocess.run(
             command,
             cwd=cwd,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
         )
 
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+    )
     append_command_log(log_parts, command, result)
     return result
 
 def save_test_log(log_path: Path, log_text: str):
     """Persist the full captured test log."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(log_text, encoding="utf-8")
 
 def tail_lines(output: str, line_count: int = DEFAULT_TEST_LOG_TAIL_LINES) -> str:
@@ -271,9 +275,9 @@ def tail_lines(output: str, line_count: int = DEFAULT_TEST_LOG_TAIL_LINES) -> st
         tail += "\n"
     return tail
 
-def print_log_output(log_text: str, full_log: bool):
-    """Print either a full log or the configured tail."""
-    output = log_text if full_log else tail_lines(log_text)
+def print_log_tail(log_text: str):
+    """Print the configured tail of a captured log."""
+    output = tail_lines(log_text)
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
 
@@ -296,10 +300,16 @@ def run_single_test(
     isVulnerable: bool = True,
     pause: bool = False,
     refresh: bool = False,
-    print_full_log: bool = False,
+    log_mode: str = LOG_FILE,
+    log_file: str | None = None,
     system: str = systemStr,
 ) -> bool:
     """Run test for a single case"""
+    if log_mode not in LOG_MODES:
+        raise ValueError(f"Unsupported test log mode: {log_mode}")
+    if log_mode != LOG_FILE and log_file is not None:
+        raise ValueError("A custom log filename requires file logging mode")
+
     case_name = case_dir.name
     info(f"Testing: {case_name}")
     print()
@@ -310,7 +320,7 @@ def run_single_test(
     start_point = get_start_point(case_dir)
     
     vulnerable_str = "true" if isVulnerable else "false"
-    log_path = test_log_path(case_dir, isVulnerable, system)
+    log_path = test_log_path(case_dir, isVulnerable, system, filename=log_file)
     log_parts: list[str] = []
 
     try:
@@ -323,20 +333,21 @@ def run_single_test(
                 command,
                 cwd=case_dir,
                 log_parts=log_parts,
-                live_output=print_full_log,
+                log_mode=log_mode,
             )
 
             # To handle legacy test output that have not been updated to use the new nice-archive library. Will be removed in the future.
             if result.returncode != 0:
                 retry_message = f"Primary test command failed, retrying with legacy output for {case_name}"
                 warning(retry_message)
-                log_parts.append(f"\n# {retry_message}\n")
+                if log_mode == LOG_FILE:
+                    log_parts.append(f"\n# {retry_message}\n")
                 command = ["nix", "run", *refresh_args, f".#testVulnerable{vulnerable_str.capitalize()}"]
                 result = run_logged_command(
                     command,
                     cwd=case_dir,
                     log_parts=log_parts,
-                    live_output=print_full_log,
+                    log_mode=log_mode,
                 )
         else:
             command = ["nix-build", "default.nix", "-A", f"testVulnerable{vulnerable_str.capitalize()}"]
@@ -344,7 +355,7 @@ def run_single_test(
                 command,
                 cwd=case_dir,
                 log_parts=log_parts,
-                live_output=print_full_log,
+                log_mode=log_mode,
             )
 
             if result.returncode == 0:
@@ -353,12 +364,13 @@ def run_single_test(
                     command,
                     cwd=case_dir,
                     log_parts=log_parts,
-                    live_output=print_full_log,
+                    log_mode=log_mode,
                 )
 
         log_text = "".join(log_parts)
-        save_test_log(log_path, log_text)
-        info(f"Full test log saved to: {log_path}")
+        if log_mode == LOG_FILE:
+            save_test_log(log_path, log_text)
+            info(f"Test log saved to: {log_path}")
 
         if result.returncode == 0:
             success(f"Test passed: {case_name}")
@@ -367,11 +379,11 @@ def run_single_test(
             warning(f"Test failed: {case_name}")
             passed = False
 
-        if log_text and not print_full_log:
+        if log_mode == LOG_FILE and log_text:
             info(f"Printing last {DEFAULT_TEST_LOG_TAIL_LINES} lines of test output:")
-            print_log_output(log_text, full_log=print_full_log)
+            print_log_tail(log_text)
     except Exception as e:
-        if log_parts:
+        if log_mode == LOG_FILE and log_parts:
             try:
                 save_test_log(log_path, "".join(log_parts))
                 warning(f"Partial test log saved to: {log_path}")
@@ -388,7 +400,8 @@ def run_all_tests(
     isVulnerable: bool = True,
     pause: bool = False,
     refresh: bool = True,
-    print_full_log: bool = False,
+    log_mode: str = LOG_FILE,
+    log_file: str | None = None,
     system: str = systemStr,
 ) -> bool:
     """Run tests for all cases"""
@@ -406,7 +419,8 @@ def run_all_tests(
             isVulnerable=isVulnerable,
             pause=False,
             refresh=refresh,
-            print_full_log=print_full_log,
+            log_mode=log_mode,
+            log_file=log_file,
             system=system,
         ):
             passed += 1
@@ -446,9 +460,18 @@ def run_tests():
         return
 
     if selected == ALL_CASES:
-        run_all_tests(isVulnerable=is_vulnerable, pause=True)
+        run_all_tests(
+            isVulnerable=is_vulnerable,
+            pause=True,
+            log_mode=LOG_NONE,
+        )
     else:
-        run_single_test(selected, isVulnerable=is_vulnerable, pause=True, print_full_log=True)
+        run_single_test(
+            selected,
+            isVulnerable=is_vulnerable,
+            pause=True,
+            log_mode=LOG_LIVE,
+        )
 
     show_main_menu()
 
@@ -826,6 +849,40 @@ def parse_bool(value: str) -> bool:
 
     raise argparse.ArgumentTypeError("expected true or false")
 
+class TestLogAction(argparse.Action):
+    """Parse --log MODE [FILE]."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: list[str],
+        option_string: str | None = None,
+    ):
+        mode = values[0].casefold()
+
+        if mode not in LOG_MODES:
+            parser.error("--log mode must be one of: live, file, none")
+
+        if mode == LOG_FILE:
+            if len(values) > 2:
+                parser.error("--log file accepts at most one filename")
+            filename = values[1] if len(values) == 2 else None
+        else:
+            if len(values) != 1:
+                parser.error(f"--log {mode} does not accept a filename")
+            filename = None
+
+        setattr(namespace, self.dest, (mode, filename))
+
+class TestHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Format the optional test log filename clearly."""
+
+    def _format_args(self, action: argparse.Action, default_metavar: str) -> str:
+        if isinstance(action, TestLogAction):
+            return "MODE [FILE]"
+        return super()._format_args(action, default_metavar)
+
 def add_case_args(parser: argparse.ArgumentParser, include_all: bool = False):
     """Add case selection options to a command parser."""
     parser.add_argument(
@@ -896,6 +953,15 @@ def build_parser() -> argparse.ArgumentParser:
         "test",
         help="run CVE tests",
         description="Run one CVE test or all CVE tests.",
+        formatter_class=TestHelpFormatter,
+        epilog="""logging modes:
+  --log live              print test output live; do not create a log file
+  --log file              save the full log using the default per-case name
+  --log file NAME         save the full log as NAME inside each case directory
+  --log none              suppress test output and do not create a log file
+
+CLI test runs default to "--log file". In the interactive menu, single-case
+tests use live logging and all-case runs suppress test output.""",
     )
     add_case_args(test_parser, include_all=True)
     add_vulnerability_arg(test_parser)
@@ -907,16 +973,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="pass --refresh to nix run",
     )
     test_parser.add_argument(
-        "--full-log",
-        action="store_true",
-        dest="print_full_log",
-        help=f"print the full test log instead of only the last {DEFAULT_TEST_LOG_TAIL_LINES} lines",
-    )
-    test_parser.add_argument(
-        "--show-output",
-        action="store_true",
-        dest="print_full_log",
-        help=argparse.SUPPRESS,
+        "--log",
+        nargs="+",
+        action=TestLogAction,
+        default=(LOG_FILE, None),
+        dest="test_log",
+        metavar="MODE [FILE]",
+        help=(
+            "test logging mode: live, file [FILE], or none "
+            "(default: file with an automatic per-case filename)"
+        ),
     )
     test_parser.set_defaults(action="test", print_help_when_empty=True, command_parser=test_parser)
 
@@ -1067,6 +1133,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
         )
 
     if action == "test":
+        log_mode, log_file = args.test_log
         selected = cli_case(
             args,
             parser,
@@ -1079,7 +1146,8 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             return run_all_tests(
                 isVulnerable=cli_vulnerability(args),
                 refresh=True,
-                print_full_log=args.print_full_log,
+                log_mode=log_mode,
+                log_file=log_file,
                 system=args.system,
             )
 
@@ -1087,7 +1155,8 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             selected,
             isVulnerable=cli_vulnerability(args),
             refresh=args.refresh,
-            print_full_log=args.print_full_log,
+            log_mode=log_mode,
+            log_file=log_file,
             system=args.system,
         )
 
