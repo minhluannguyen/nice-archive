@@ -7,8 +7,6 @@ in
 {
   system.stateVersion = "24.09";
 
-  virtualisation.graphics = isGraphics;
-
   networking.hostName = hostName;
 
   environment.systemPackages = with pkgs; [
@@ -20,6 +18,9 @@ in
     isSystemUser = true;
     password = if !isTest then "root" else null;
   };
+}
+// lib.optionalAttrs (isGraphics != null) {
+  virtualisation.graphics = isGraphics;
 }
 // lib.optionalAttrs (isRetrictNetwork != null) {
   virtualisation.restrictNetwork = isRetrictNetwork;

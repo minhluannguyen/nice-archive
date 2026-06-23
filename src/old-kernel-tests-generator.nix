@@ -51,7 +51,11 @@ let
 
   baseVMs = lib.mapAttrs
     (_: value:
-      builtins.removeAttrs value [ "oldKernelNixpkgs" "oldKernelRestrictNetwork" ]
+      builtins.removeAttrs value [
+        "oldKernelGraphics"
+        "oldKernelNixpkgs"
+        "oldKernelRestrictNetwork"
+      ]
       // { isOldKernelVM = false; })
     VMs;
 
@@ -82,7 +86,7 @@ let
           hostName = value.hostname or name;
           isVulnerable = vmIsVulnerable;
           isScenario = isInteractive;
-          isGraphics = isInteractive;
+          isGraphics = value.oldKernelGraphics or isInteractive;
           isOldKernelVM = true;
           isRetrictNetwork = value.oldKernelRestrictNetwork or null;
           configPath = getConfigPath name value;
