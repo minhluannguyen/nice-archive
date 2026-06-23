@@ -16,6 +16,7 @@ let
     isVulnerable = if value ? isVulnerable then value.isVulnerable else null;
     isRetrictNetwork = if value ? isRetrictNetwork then value.isRetrictNetwork else true;
     vmNixpkgs = if value ? nixpkgs then value.nixpkgs else nixpkgs;
+    vmExtraArgs = if value ? extraArgs then value.extraArgs else {};
 
     nodeValueTemplate = isVulnerable: vmNixpkgs: (mkStandaloneVm {
       configPath = ./vm-configs/vm-template-instance.nix;
@@ -24,6 +25,7 @@ let
         isTest = false;
         hostName = if value ? hostname then value.hostname else name;
         inherit caseDir isVulnerable configPath isRetrictNetwork;
+        extraArgs = vmExtraArgs;
       };
       inherit system;
     });
