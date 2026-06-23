@@ -24,7 +24,7 @@ let
       extraArgs = { 
         isTest = false;
         hostName = if value ? hostname then value.hostname else name;
-        inherit caseDir isVulnerable configPath isRetrictNetwork;
+        inherit caseDir isVulnerable configPath isRetrictNetwork isGraphics isOldKernelVM;
         extraArgs = vmExtraArgs;
       };
       inherit system;

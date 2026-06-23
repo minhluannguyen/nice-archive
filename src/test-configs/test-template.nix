@@ -102,6 +102,8 @@ let
     let
       variant = getNodeVariant name value;
       isRetrictNetwork = if value ? isRetrictNetwork then value.isRetrictNetwork else true;
+      isGraphics = if value ? isGraphics then value.isGraphics else false;
+      isOldKernelVM = if value ? isOldKernelVM then value.isOldKernelVM else false;
       extraArgs = if value ? extraArgs then value.extraArgs else {};
     in
       (import ../vm-configs/vm-template-instance.nix { 
@@ -110,7 +112,7 @@ let
         isVulnerable = if variant == "invariant" then null else isVulnerable;
         isScenario = isInteractive;
         configPath = getConfigPath name value; 
-        inherit caseDir isRetrictNetwork extraArgs;
+        inherit caseDir isRetrictNetwork isGraphics isOldKernelVM extraArgs;
       })
   ) VMs);
 
