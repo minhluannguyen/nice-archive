@@ -39,6 +39,12 @@ def check_root_gid(machine, user):
     ), f"User {user} does not have root privileges"
 
 
+def check_screen_text(machine, text, timeout=60):
+    """Check if OCR can find text on the machine screen."""
+    print("ASSERTION BLOCK: check_screen_text")
+    machine.wait_for_text(text, timeout=timeout)
+
+
 def check_file_exists(machine, file_path, is_existing=True, timeout=90):
     """Check if a file exists or doesn't exist."""
     print(

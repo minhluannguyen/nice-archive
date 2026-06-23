@@ -1,4 +1,4 @@
-{ title, isInteractive, isVulnerable, caseDir, VMs, testScriptPath}:
+{ title, isInteractive, isVulnerable, caseDir, VMs, testScriptPath, enableOCR ? false }:
 { pkgs, lib, ... }:
 
 let 
@@ -139,6 +139,8 @@ in
     extraPythonPackages = ps: [ (assertionBlocksPkg ps) ];
 
     testScript = testScript;
+  } // testPkg.lib.optionalAttrs enableOCR {
+    enableOCR = true;
   } // testPkg.lib.optionalAttrs (isInteractive) {
     interactive.sshBackdoor.enable = true;
   })

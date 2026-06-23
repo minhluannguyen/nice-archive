@@ -8,7 +8,8 @@
   testScriptPath,
   isVulnerable ? true,
   oldKernelVMNames ? builtins.attrNames VMs,
-  generateInteractiveTests ? true
+  generateInteractiveTests ? true,
+  enableOCR ? false
 }:
 
 let
@@ -67,6 +68,7 @@ let
       system
       testScriptPath
       generateInteractiveTests
+      enableOCR
       ;
     VMs = baseVMs;
   };

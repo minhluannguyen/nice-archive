@@ -55,8 +55,12 @@ pkgs.runCommand "nixos-old-kernel-test" {
     sed -i "s#^exec.*#''${escExec}#" "$dst"
     sed -i "s#-net nic.*#''${escNet}#" "$dst"
 
-    # Add virtio-net for this VM - socket name follows the loop index.
-    sed -i "s|\\(\$QEMU_OPTS\\)|-device virtio-net-pci,netdev=vlan1,mac=52:54:00:12:01:0''${idx} -netdev vde,id=vlan1,sock=\"\$QEMU_VDE_SOCKET_1\" \\1|" "$dst"
+    # Add virtio-net for this VM when the base script does not already carry
+    # the test VLAN. Multi-node tests already have this wiring in their
+    # generated run scripts.
+    if ! grep -q 'netdev=vlan1' "$dst"; then
+      sed -i "s|\\(\$QEMU_OPTS\\)|-device virtio-net-pci,netdev=vlan1,mac=52:54:00:12:01:0''${idx} -netdev vde,id=vlan1,sock=\"\$QEMU_VDE_SOCKET_1\" \\1|" "$dst"
+    fi
 
     newScripts+=("$dst")
     idx=$((idx + 1))
