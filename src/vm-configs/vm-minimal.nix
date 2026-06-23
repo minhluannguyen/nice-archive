@@ -1,4 +1,4 @@
-{ isTest, hostName, isRetrictNetwork ? true }:
+{ isTest, hostName, isRetrictNetwork ? true, isGraphics }:
 { pkgs, lib, ... }:
 
 let
@@ -7,13 +7,11 @@ in
 {
   system.stateVersion = "24.09";
 
-  virtualisation.graphics = false;
-
-  virtualisation.restrictNetwork = isRetrictNetwork;
+  virtualisation.graphics = isGraphics;
 
   networking.hostName = hostName;
 
-  environment.systemPackages = with pkgs; [ 
+  environment.systemPackages = with pkgs; [
     bashInteractive
     coreutils
   ];
@@ -22,4 +20,7 @@ in
     isSystemUser = true;
     password = if !isTest then "root" else null;
   };
+}
+// lib.optionalAttrs (isRetrictNetwork != null) {
+  virtualisation.restrictNetwork = isRetrictNetwork;
 }
