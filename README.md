@@ -70,6 +70,28 @@ nice-archive vm --case cve-2016-5195-dirty-cow --name vmVulnerableTrue
 nice-archive update-flakes --all
 ```
 
+Test logging is controlled with `--log`:
+
+```bash
+# Default for CLI runs: save the full log under the case directory and
+# print only the last 100 lines after the test.
+nice-archive test --case cve-2016-5195-dirty-cow --log file
+
+# Save using a custom filename inside the case directory.
+nice-archive test --case cve-2016-5195-dirty-cow --log file debug.log
+
+# Print test output live without creating a log file.
+nice-archive test --case cve-2016-5195-dirty-cow --log live
+
+# Suppress test output and do not create a log file.
+nice-archive test --case cve-2016-5195-dirty-cow --log none
+```
+
+When `--log` is omitted, CLI test runs use `--log file` with a filename such as
+`test-vulnerable-true-x86_64-linux.log`. Relative custom filenames are created
+inside each case directory. In the interactive menu, single-case tests use live
+logging, while all-case runs suppress test output.
+
 Switch into the interactive menu explicitly:
 
 ```bash
