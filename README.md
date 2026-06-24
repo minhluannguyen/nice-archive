@@ -1,139 +1,300 @@
-## NICE Framework implementation
+# NICE Archive
 
-### Overview
+NICE Archive is a collection of reproducible NixOS virtual machines and NixOS
+integration tests for CVE reproductions. Each CVE case lives under
+[`cves/`](./cves/) and contains the Nix, VM, exploit, and test files needed to
+rebuild the experiment.
 
-This repository contains a collection of **reproducible NixOS virtual machines and NixOS integration tests** for CVEs. Each CVE is organized in its own folder under `cves/` and contains the Nix expressions needed to rebuild the environments used in the experiments. Consult the individual CVE README files for specific instructions on how to build and run the VMs and tests.
+The project also includes a small CLI, `nice-archive`, and reusable library
+generators under [`src/`](./src/) for creating consistent vulnerable/fixed
+test scenarios.
 
-### Repo layout
+## Repository layout
 
-- `cves/`: one folder per CVE
-- `cleanup-script.sh`: deletes generated `*.qcow2` disk images and `result` symlinks under `cves/`
-
-### Requirements
-
-- [Nix package manager](https://nixos.org/download.html)
-- Flakes enabled
-- QEMU available on the host; KVM acceleration recommended
-
-Enable flakes by adding the following lines to `/etc/nix/nix.conf`:
-
+```text
+.
+├── cves/                  # One directory per CVE reproduction
+├── docs/                  # Project documentation
+├── src/                   # NICE Archive Nix libraries and Python assertions
+├── nice-archive.py        # CLI implementation
+├── nice-archive           # Local wrapper for the CLI
+├── cleanup-script.sh      # Removes generated VM/test artifacts
+├── cve-loc-report.sh      # Helper script for rough CVE size reports
+└── flake.nix              # Development shell and CLI app
 ```
+
+Start with [`docs/README.md`](./docs/README.md) for the documentation table of
+contents.
+
+## Requirements
+
+- [Nix](https://nixos.org/download.html)
+- Nix flakes enabled
+- QEMU available on the host
+- KVM acceleration recommended for practical VM performance
+- Optional: [direnv](https://direnv.net/) with nix-direnv
+
+Enable flakes in `/etc/nix/nix.conf`:
+
+```text
 experimental-features = nix-command flakes
 ```
 
-See upstream docs: https://wiki.nixos.org/wiki/Flakes
+## Development shell
 
-### Build & usage (reproducing experiments)
-
-Each CVE directory typically contains a `flake.nix` exposing one or more outputs. Output names vary per CVE, so first inspect the available outputs.
-
-#### 1) Inspect flake outputs
+Enter the project shell:
 
 ```bash
-cd cves/<cve-directory>
-nix flake show
+nix develop
 ```
 
-Common outputs:
+The shell provides the Python dependencies and runtime tools used by the CLI.
 
-- `vm` (or `vmServer`, `vmClient`, …): build a runnable NixOS VM image
-- `testVulnerableTrue` / `testVulnerableFalse`: build an integration test closure
-
-#### 2) Build and run a standalone VM
-
-If the flake provides `vm`:
+With direnv:
 
 ```bash
-cd cves/<cve-directory>
-nix build .#vm
-ls -la result/bin
-./result/bin/run-*-vm
+cd /path/to/nice-archive
+direnv allow
 ```
 
-If the CVE exposes multiple VMs (e.g. `vmServer` / `vmClient`), build that output and run the corresponding `result/bin/run-…` launcher.
-For CVEs that do not use flakes, refer to their individual README files for instructions.
+After that, entering the repository loads the same environment automatically.
 
-Note: Flake requires to be a git repository, and files need to be tracked by git to be included in the build. 
+## CLI quick start
 
-#### 3) Build and run a NixOS integration test
+Run CLI commands from the repository root.
 
-If the flake provides a test output (commonly `testVulnerableTrue`):
+With the development shell active:
 
 ```bash
-cd cves/<cve-directory>
-nix build .#testVulnerableTrue.driver
-./result/bin/nixos-test-driver
-# or 
-nix build .#testVulnerableTrue -L
+nice-archive list-cves
 ```
 
-The test driver boots the VM(s) listed under `nodes = { ... }` in the `*test*.nix` file and then executes the Python `testScript`.
-
-#### Interactive mode (recommended for debugging)
-
-To start an interactive test driver session, build and run:
-```bash
-cd cves/<cve-directory>
-nix build .#testVulnerableTrue.driverInteractive
-./result/bin/nixos-test-driver --interactive
-```
-This starts an interactive Python REPL that has the node objects (e.g. `server`, `client`, `attacker`) already created and wired up. This means the test framework **automatically builds and bootstraps the VMs** for you—no need to manually run individual `run-*-vm` scripts.
-
-Common interactive workflow:
-
-- Boot all nodes: `start_all()`
-- Wait for a unit: `<node>.wait_for_unit("multi-user.target")`
-- Run a command in a node: `<node>.succeed("id")` (or `.fail(...)`)
-- Inspect logs: `<node>.succeed("journalctl -u <unit> --no-pager")`
-
-#### QEMU GUI popup vs headless (graphics toggle)
-
-Whether QEMU windows pop up is controlled by the node VM configuration (usually in a `*-vm*.nix` file) via `virtualisation.graphics`:
-
-- `virtualisation.graphics = true;` (or leaving it at the default) may open a QEMU display window for the node.
-- `virtualisation.graphics = false;` forces headless mode; you interact via the test driver interface (serial console / command execution).
-
-If you prefer debugging inside a visible VM window, set `virtualisation.graphics = true;` for the node(s). If you’re running in CI or want fully automated runs, or want to keep things in the terminal, keep it `false`.
-
-### End-to-end example: CVE-2014-0160 (Heartbleed)
+Without entering the shell:
 
 ```bash
-cd cves/cve-2014-0160-heartbleed
-
-# Vulnerable configuration
-nix build .#testVulnerableTrue
-./result/bin/nixos-test-driver
-
-# Non-vulnerable configuration
-nix build .#testVulnerableFalse
-./result/bin/nixos-test-driver
-
-# Optional: standalone VM
-nix build .#vm
-ls -la result/bin
-./result/bin/run-*-vm
+nix run . -- list-cves
 ```
 
-### Cleaning up generated artifacts
+The examples below use `nice-archive`. If you are outside the development
+shell, replace `nice-archive` with `nix run . --`.
 
-Some runs create `result` symlinks and/or QEMU disk images (`*.qcow2`) under `cves/`.
+### List CVE cases
 
 ```bash
-./cleanup-script.sh
+nice-archive list-cves
 ```
 
-### Troubleshooting
+### Run automated tests
 
-- **“flake … does not provide attribute …”**
-  Run `nix flake show` inside the CVE directory and use one of the outputs shown there (many CVEs use `testVulnerableTrue` rather than a generic `test`).
+Run one vulnerable test:
 
-- **Port-forward conflicts / privileged ports**
-  Some VMs forward privileged ports (e.g. 23). If that conflicts on your host, edit the relevant `*-vm*.nix` and change `virtualisation.forwardPorts` to a higher host port (e.g. 2323) or use `sudo`.
+```bash
+nice-archive test \
+  --case cve-2025-32463-chwoot \
+  --vulnerable true
+```
 
-- **“Git tree is dirty” warnings**
-  Expected when local changes exist; it doesn’t impact reproducibility.
+Run the fixed/non-vulnerable variant:
 
-### References
+```bash
+nice-archive test \
+  --case cve-2025-32463-chwoot \
+  --vulnerable false
+```
 
-- [Nix Manual](https://nixos.org/manual/nix/)
-- [nixos-generators](https://github.com/nix-community/nixos-generators)
+Run all vulnerable or fixed tests:
+
+```bash
+nice-archive test --all --vulnerable true
+nice-archive test --all --vulnerable false
+```
+
+By default, CLI test runs save the full log in the case directory and print
+only the last 100 lines.
+
+Logging modes:
+
+```bash
+# Save the full log with the default generated filename.
+nice-archive test --case cve-2025-32463-chwoot --log file
+
+# Save the full log using a custom filename inside the case directory.
+nice-archive test --case cve-2025-32463-chwoot --log file debug.log
+
+# Print the Nix/test output live and do not create a log file.
+nice-archive test --case cve-2025-32463-chwoot --log live
+
+# Suppress test output and do not create a log file.
+nice-archive test --case cve-2025-32463-chwoot --log none
+```
+
+Add `--refresh` to pass `--refresh` to `nix run`.
+
+### List and run standalone VMs
+
+Some cases expose manually runnable VMs through `standaloneVMs`.
+
+```bash
+nice-archive list-vms --case cve-2025-32463-chwoot
+nice-archive vm --case cve-2025-32463-chwoot --name server
+```
+
+Use `--no-prompt` in scripts to fail instead of opening interactive prompts
+when required values are missing.
+
+### Update flake locks
+
+```bash
+nice-archive update-flakes --case cve-2025-32463-chwoot
+nice-archive update-flakes --all
+```
+
+## Interactive helper
+
+The interactive helper can be started with `nice-archive start`;
+
+### Menu helper
+
+```bash
+nice-archive start
+
+   .      .                                                                                             .      .   
+   _\/  \/_    ███╗   ██╗██╗ ██████╗███████╗     █████╗ ██████╗  ██████╗██╗  ██╗██╗██╗   ██╗███████╗    _\/  \/_   
+    _\/\/_     ████╗  ██║██║██╔════╝██╔════╝    ██╔══██╗██╔══██╗██╔════╝██║  ██║██║██║   ██║██╔════╝     _\/\/_    
+_\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     █████╗      ███████║██████╔╝██║     ███████║██║██║   ██║█████╗   _\_\_\/\/_/_/_
+ / /_/\/\_\ \  ██║╚██╗██║██║██║     ██╔══╝      ██╔══██║██╔══██╗██║     ██╔══██║██║╚██╗ ██╔╝██╔══╝    / /_/\/\_\ \ 
+    _/\/\_     ██║ ╚████║██║╚██████╗███████╗    ██║  ██║██║  ██║╚██████╗██║  ██║██║ ╚████╔╝ ███████╗     _/\/\_    
+    /\  /\     ╚═╝  ╚═══╝╚═╝ ╚═════╝╚══════╝    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚══════╝     /\  /\    
+   '      '                                                                                             '      '   
+    
+? What would you like to do? (Use arrow keys)
+ → Start interactive scenario
+   Run tests
+   Run standalone VM machines
+   Update flakes for CVE cases
+   Exit
+
+```
+
+The menu lets you select a CVE case and then:
+
+- start an interactive scenario;
+- run tests;
+- run standalone VMs; or
+- update flake locks.
+
+### Scenario helper
+
+The scenario helper is the preferred debugging interface for multi-VM tests:
+
+```bash
+nice-archive scenario \
+  --case cve-2025-32463-chwoot \
+  --vulnerable true \
+  --popup false
+```
+
+This will run the interactive mode of the NixOS test driver and automatically start the VMs. After the VMs are running, some VM windows will be opened for the user to interact with the VMs.
+
+The user can also interact with the VMs through the test driver terminal. Some common commands are:
+
+```python
+start_all()
+server.wait_for_unit("multi-user.target")
+server.succeed("id")
+server.succeed("journalctl -u <unit> --no-pager")
+```
+
+Exit the scenario with `Ctrl+D` in the scenario terminal and choose to kill the
+VMs.
+
+Note: the `test` and `scenario` commands run `git add <case-dir>` before
+invoking flake outputs so that newly created files are visible to Nix's
+Git-backed flake evaluation. Review `git status` before committing.
+
+## Direct Nix usage
+
+The CLI is recommended because it knows the modern output names and legacy
+fallbacks. Direct Nix commands are still useful when debugging a case.
+
+Modern library-backed cases expose outputs like:
+
+```bash
+cd cves/<case>
+
+nix run .#test-vulnerable-true-x86_64-linux
+nix run .#test-vulnerable-false-x86_64-linux
+nix run .#start-scenario-vulnerable-true-x86_64-linux
+nix run .#standaloneVMs.<vm-name>
+```
+
+Some older cases still expose legacy names such as:
+
+```bash
+nix run .#testVulnerableTrue
+nix run .#testVulnerableFalse
+```
+
+If an output name fails, inspect the case's `flake.nix` or use the CLI first.
+
+## Documentation
+
+- [Documentation index](./docs/README.md)
+- [NICE Archive library reference](./docs/nice-archive-libs.md)
+- [Reporting a vulnerability with NICE Archive](./docs/reporting-vulnerabilities.md)
+
+The library reference documents `testsGenerator`, `standaloneVMGenerator`,
+`oldKernelTestsGenerator`, graphical/OCR flags, old-kernel compatibility, and
+Python assertion helpers.
+
+The reporting guide is the recommended workflow for adding or updating a CVE
+case.
+
+## Cleaning generated artifacts
+
+Test and VM runs can create `result` symlinks, `*.qcow2` disk images, and
+`.nixos-test-history` files.
+
+Clean all CVE cases:
+
+```bash
+./cleanup-script.sh cves
+```
+
+Clean one case:
+
+```bash
+./cleanup-script.sh cves/cve-2025-32463-chwoot
+```
+
+## Troubleshooting
+
+### `flake ... does not provide attribute ...`
+
+The case may use modern generated names, legacy names, or standalone nested
+outputs. Prefer the CLI first:
+
+```bash
+nice-archive test --case <case> --vulnerable true
+nice-archive list-vms --case <case>
+```
+
+### New files are missing from Nix evaluation
+
+Nix flakes sourced from Git only include files visible to Git. Add new case
+files to the index or use the CLI commands that stage the selected case before
+running tests and scenarios.
+
+### Port conflicts
+
+Some VMs forward host ports. If a port is already in use, edit the relevant
+`vm-*.nix` file and change `virtualisation.forwardPorts`.
+
+### GUI or OCR tests fail
+
+Graphical tests normally need:
+
+- `isGraphics = true` on the graphical VM; and
+- `enableOCR = true` in the generator when using OCR assertions.
+
+See the library reference for details.
