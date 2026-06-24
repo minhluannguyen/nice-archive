@@ -2,7 +2,13 @@
 { pkgs, lib, ... }:
 
 let
-  
+  virtualisationOptions =
+    lib.optionalAttrs (isGraphics != null) {
+      graphics = lib.mkForce isGraphics;
+    }
+    // lib.optionalAttrs (isRetrictNetwork != null) {
+      restrictNetwork = isRetrictNetwork;
+    };
 in
 {
   system.stateVersion = "24.09";
@@ -19,9 +25,6 @@ in
     password = if !isTest then "root" else null;
   };
 }
-// lib.optionalAttrs (isGraphics != null) {
-  virtualisation.graphics = isGraphics;
-}
-// lib.optionalAttrs (isRetrictNetwork != null) {
-  virtualisation.restrictNetwork = isRetrictNetwork;
+// lib.optionalAttrs (virtualisationOptions != {}) {
+  virtualisation = virtualisationOptions;
 }
