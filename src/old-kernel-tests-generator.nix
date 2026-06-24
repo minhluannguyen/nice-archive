@@ -81,6 +81,10 @@ let
       vmIsVulnerable =
         if variant == "invariant" then null
         else isVulnerable;
+      oldKernelIsGraphics =
+        if value ? oldKernelGraphics then value.oldKernelGraphics
+        else if value ? isGraphics then value.isGraphics
+        else isInteractive;
     in
       import "${oldNixpkgs}/nixos" {
         configuration = import ./vm-configs/vm-template-instance.nix {
@@ -88,7 +92,7 @@ let
           hostName = value.hostname or name;
           isVulnerable = vmIsVulnerable;
           isScenario = isInteractive;
-          isGraphics = value.oldKernelGraphics or isInteractive;
+          isGraphics = oldKernelIsGraphics;
           isOldKernelVM = true;
           isRetrictNetwork = value.oldKernelRestrictNetwork or null;
           configPath = getConfigPath name value;

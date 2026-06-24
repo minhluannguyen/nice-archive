@@ -15,6 +15,8 @@ let
     configPath = if value ? configPath then value.configPath else throw "Each VM must have a configPath defined";
     isVulnerable = if value ? isVulnerable then value.isVulnerable else null;
     isRetrictNetwork = if value ? isRetrictNetwork then value.isRetrictNetwork else true;
+    isGraphics = if value ? isGraphics then value.isGraphics else false;
+    isOldKernelVM = if value ? isOldKernelVM then value.isOldKernelVM else false;
     vmNixpkgs = if value ? nixpkgs then value.nixpkgs else nixpkgs;
     vmExtraArgs = if value ? extraArgs then value.extraArgs else {};
 
