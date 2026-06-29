@@ -14,9 +14,10 @@ A good report case should answer five questions:
 
 1. What vulnerability is being reproduced?
 2. Which software and versions are vulnerable or fixed?
-3. What virtual machines are needed to demonstrate the vulnerability?
-4. What action proves exploitation or mitigation?
-5. What automated assertion verifies the result?
+3. What does the scenario look like, and which machines are involved?
+4. How are the machines are configured to reproduce the vulnerability?
+4. What action triggers the vulnerability?
+5. Which assertion can be used to check the vulnerability of the system?
 
 The expected output is a directory under [`cves/`](../cves/) with:
 
@@ -39,14 +40,39 @@ If you are an LLM agent working on a new report, follow this order:
 
 1. Do read-only discovery first.
 2. Identify vulnerable and fixed versions.
-3. Design the VM topology.
-4. Decide which NICE Archive library generator fits.
-5. Implement the Nix files.
-6. Implement the automated tests.
-7. Use the CLI tool to start VMs and reproduce the vulnerability.
-8. Run vulnerable and fixed tests.
-9. Update the case README with verified commands and assertions.
-10. Report exactly what changed and what was verified.
+3. Record exploit provenance before copying or adapting exploit code.
+4. Search nixpkgs history before building vulnerable software from source.
+5. Design the VM topology.
+6. Decide which NICE Archive library generator fits.
+7. Implement the Nix files.
+8. Start the VM scenario or standalone VMs and reproduce the vulnerability manually.
+9. Prefer SSH or popup VM windows for manual reproduction.
+10. Translate the successful manual workflow into `test.py`.
+11. End the automated test with suitable `assertion_blocks` helpers.
+12. Run vulnerable and fixed tests.
+13. Update the case README with verified human commands and automated assertions.
+14. Report exactly what changed and what was verified.
+
+## LLM reproduction contract
+
+When using this framework, an LLM agent should treat the following as hard
+requirements:
+
+- Prefer existing nixpkgs packages and historical nixpkgs revisions over
+  building vulnerable software from source.
+- Use `nix-versions` or Nixpkgs history before deciding that a source build is
+  necessary.
+- Follow existing case style before inventing a new structure. Heartbleed is a
+  good model for historical user-space packages.
+- Use the scenario helper plus SSH for manual validation when possible.
+- Use standalone VMs for manual validation when the NixOS test driver is not a
+  good fit.
+- Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
+- Convert the manual workflow into `test.py`.
+- End `test.py` with framework assertion blocks whenever one fits.
+- Add exploit provenance and human manual reproduction commands to the CVE
+  README.
+- Point readers to `test.py` as the machine-checkable oracle.
 
 ## 1. Create a case directory
 
@@ -93,14 +119,58 @@ For each report, decide what the automated test should prove:
 - vulnerable case: the exploit succeeds;
 - fixed case: the exploit fails or the vulnerable effect is absent.
 
-For finding the Nixpkgs commit that contains the vulnerable or fixed version, use tools like:
-- [Nix package version](https://lazamar.co.uk/nix-versions/)
+### Exploit provenance
+
+Before integrating exploit code, record where it came from and how it was
+changed:
+
+- original advisory URL;
+- upstream patch or commit, if known;
+- exploit source URL, if copied or adapted;
+- whether the exploit was copied, modified, simplified, or rewritten;
+- why any changes were needed for the NixOS VM environment; and
+- any safety limits added for automated testing.
+
+This information belongs in the CVE README, not only in code comments.
+
+### Package source strategy
+
+Before building vulnerable software from source, check whether nixpkgs already
+contains the vulnerable and fixed versions.
+
+Useful tools:
+
+- [Nix package versions](https://lazamar.co.uk/nix-versions/)
 - [nix-versions](https://github.com/denful/nix-versions)
-- Or, search the Nixpkgs Git history on GitHub for the package name and version.
+- Nixpkgs Git history on GitHub
+
+Example:
+
+```bash
+nix shell github:denful/nix-versions -c nix-versions --nixhub --all gzip
+```
+
+Use this priority order:
+
+1. Prefer an existing nixpkgs package at a historical nixpkgs revision.
+2. For normal user-space packages, follow the Heartbleed style: fetch or select
+   the historical package inside the VM module, usually with
+   `builtins.fetchTarball` and `import`.
+3. If the vulnerable component is a system-level component, distribution
+   service, kernel, or tightly coupled dependency set, use `variant = "system"`
+   or an old-kernel generator.
+4. Use `overrideAttrs` when nixpkgs has the package but needs a small source or
+   version adjustment.
+5. Build from source only after nixpkgs history does not provide a suitable
+   package/version.
+
+Keep package-selection logic close to the VM that needs it. Avoid moving
+user-space package selection into the top-level `flake.nix` unless the whole
+system pin must change.
 
 ## 3. Choose the VM topology
 
-Most cases fit one of these shapes:
+Most cases fit one of these shapes (but some exploits need more complex topologies, so feel free to adapt):
 
 | Topology | Use when | Common nodes |
 | --- | --- | --- |
@@ -142,15 +212,16 @@ Use this decision table:
 | --- | --- |
 | Normal package-level vulnerability | `testsGenerator` |
 | Vulnerable/fixed full system must come from different nixpkgs pins | `testsGenerator` with `variant = "system"` |
-| When `testsGenerator` is not suitable | Try `standaloneVMGenerator` |
+| Modern test exists, but humans also need direct/manual VMs | Add `standaloneVMGenerator` |
 | One or a few VMs must boot an old kernel / old NixOS while the test driver can stay modern | `oldKernelTestsGenerator` |
 | You need custom low-level old-kernel patching | `oldKernelNixosTest` |
 | The whole reproduction is too old for modern NixOS tests | `default.nix`, `npins`, and standalone/manual VMs |
 
 Most new reports should start with `testsGenerator`.
 
-When using old-kernel support, prioritize replacing the
-vulnerable target. If there are multiple machines, recommend using the standalone/manual path for the machines.
+When using old-kernel support, prioritize replacing only the vulnerable
+target. If many machines must be old at the same time, the standalone/manual
+path is usually easier to debug and document.
 
 ## 5. Write `flake.nix`
 
@@ -410,6 +481,28 @@ attacker.succeed("run-exploit http://server:8080")
 ab.check_file_contains(attacker, "/tmp/result.txt", "Pwned!")
 ```
 
+The end of the test should be the machine-checkable oracle. Prefer the
+framework's assertion blocks for that oracle:
+
+- use raw `assert` only for control flow, variant checks, or values that do not
+  fit an assertion helper;
+- finish vulnerable and fixed branches with `assertion_blocks` helpers when a
+  helper fits; and
+- model new tests on existing cases such as Heartbleed, curl-ws-loop, zgrep
+  file write, Dirty COW, chwoot, LibreOffice, and GitLab email reset.
+
+For example:
+
+```python
+if variant == "vulnerable":
+    ab.check_file_contains(server, f"{workdir}/hacked", "NICE-CVE-WRITE")
+    ab.check_file_exists(server, f"{workdir}/hacked2")
+else:
+    assert variant == "fixed", f"Unknown variant marker: {variant}"
+    ab.check_file_exists(server, f"{workdir}/hacked2", is_existing=False)
+    ab.check_file_contains(server, f"{workdir}/hacked", "protected original")
+```
+
 Useful NixOS test-driver methods include:
 
 | Method | Use |
@@ -428,8 +521,9 @@ Useful NixOS test-driver methods include:
 | `<vm>.copy_from_host("src", "dst")` | Copy a host file into the VM during a test. |
 | `<vm>.copy_from_vm("src", "dst")` | Copy a VM file back to the host during a test. |
 
-Use assertions to describe the expected security property. The full helper list
-is in the [library reference](./nice-archive-libs.md#python-assertion-blocks).
+Use assertions to describe the expected security property, not merely that a
+command exited. The full helper list and attack-type mapping is in the
+[library reference](./nice-archive-libs.md#python-assertion-blocks).
 
 ```python
 ab.check_file_exists(server, "/tmp/important.txt")
@@ -471,13 +565,13 @@ nice-archive-lib.standaloneVMGenerator {
 List them from the repository root:
 
 ```bash
-nix run . -- list-vms --case cve-yyyy-nnnn-short-name
+nice-archive list-vms --case cve-yyyy-nnnn-short-name
 ```
 
 Run one:
 
 ```bash
-nix run . -- vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
+nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 ```
 
 ## 9. Use the CLI for testing and debugging
@@ -487,20 +581,20 @@ Run CLI commands from the repository root.
 List cases:
 
 ```bash
-nix run . -- list-cves
+nice-archive list-cves
 ```
 
 Run vulnerable and fixed tests:
 
 ```bash
-nix run . -- test --case cve-yyyy-nnnn-short-name --vulnerable true
-nix run . -- test --case cve-yyyy-nnnn-short-name --vulnerable false
+nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true
+nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false
 ```
 
 Save a full log with a custom filename:
 
 ```bash
-nix run . -- test \
+nice-archive test \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
   --log file debug-vulnerable.log
@@ -509,7 +603,7 @@ nix run . -- test \
 Print live output:
 
 ```bash
-nix run . -- test \
+nice-archive test \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
   --log live
@@ -527,13 +621,13 @@ to explore a VM manually.
 Start the guided menu:
 
 ```bash
-nix run . -- start
+nice-archive start
 ```
 
 Start an interactive scenario directly:
 
 ```bash
-nix run . -- scenario \
+nice-archive scenario \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
   --popup false
@@ -572,7 +666,7 @@ Use this path for modern library-backed cases. It is the easiest path when
 `start-scenario-*` outputs exist.
 
 ```bash
-nix run . -- scenario \
+nice-archive scenario \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
   --popup false
@@ -594,13 +688,15 @@ the exploit manually:
 
 ```bash
 # terminal 1: scenario remains running
-nix run . -- scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
 
 # terminal 2: use the printed command
 <paste the printed ssh command>
 ```
 
-Inside the VM, you can run the exploit, check logs, and inspect files. When the manual flow works, translate the commands into `test.py`.
+Inside the VM, run the exploit exactly as a human researcher would, check logs,
+and inspect files. When the manual flow works, translate the commands into
+`test.py`.
 
 ### Path B: run standalone VMs manually
 
@@ -612,17 +708,17 @@ features.
 Expose standalone VMs with `standaloneVMGenerator`, then list them:
 
 ```bash
-nix run . -- list-vms --case cve-yyyy-nnnn-short-name
+nice-archive list-vms --case cve-yyyy-nnnn-short-name
 ```
 
 Start each VM in a separate terminal:
 
 ```bash
 # terminal 1
-nix run . -- vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
+nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 
 # terminal 2
-nix run . -- vm --case cve-yyyy-nnnn-short-name --name attacker
+nice-archive vm --case cve-yyyy-nnnn-short-name --name attacker
 ```
 
 For standalone VMs, you must wire the reproduction environment yourself. That
@@ -678,8 +774,8 @@ Recommended order:
 2. Check CLI discovery:
 
    ```bash
-   nix run . -- list-cves
-   nix run . -- list-vms --case cve-yyyy-nnnn-short-name
+   nice-archive list-cves
+   nice-archive list-vms --case cve-yyyy-nnnn-short-name
    ```
 
 3. Evaluate or inspect flake outputs if needed.
@@ -687,7 +783,7 @@ Recommended order:
 4. Run the vulnerable test with live logs:
 
    ```bash
-   nix run . -- test \
+   nice-archive test \
      --case cve-yyyy-nnnn-short-name \
      --vulnerable true \
      --log live
@@ -696,7 +792,7 @@ Recommended order:
 5. Run the fixed test:
 
    ```bash
-   nix run . -- test \
+   nice-archive test \
      --case cve-yyyy-nnnn-short-name \
      --vulnerable false \
      --log file
@@ -710,7 +806,7 @@ Each CVE README should be understandable without reading the implementation.
 
 Recommended structure:
 
-```markdown
+````markdown
 # CVE-YYYY-NNNN: short title
 
 ## Description
@@ -725,41 +821,99 @@ Recommended structure:
 
 ## Reproduction design
 
+Explain the VM topology, package-version strategy, and why the chosen generator
+fits this CVE.
+
+## Exploit provenance
+
+- Advisory:
+- Patch or fixing commit:
+- Exploit source:
+- Local changes made for this VM:
+- Safety limits or simplifications:
+
+## Manual reproduction
+
+Use the scenario helper with SSH or popup VM windows where possible:
+
+```bash
+nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+```
+
+Then SSH into the printed VM command and run the exploit trigger directly
+inside the VM.
+
+If the case uses standalone VMs, show each terminal and port-forwarding step
+needed to wire the machines together.
+
+Expected vulnerable result:
+
+Expected fixed result:
+
 ## Running automated tests
+
+Show the `nice-archive test` commands for vulnerable and fixed variants.
+
+## Automated oracle
+
+The machine-checkable reproduction is implemented in `test.py`. Summarize the
+assertion blocks used there and what security property each one proves.
 
 ## Interactive debugging
 
 ## Assertions
 
 ## References
-```
+````
 
 Include exact commands that were verified. Prefer CLI commands first, because
 the CLI knows the modern output naming convention and legacy fallback.
 
-## 14. Final checklist
+Avoid making human reproduction depend on the test-driver Python prompt unless
+there is no practical alternative. Prefer scenario SSH or standalone VM shell
+commands for README instructions.
+
+## 14. LLM failure modes to avoid
+
+- Do not build vulnerable software from source before checking nixpkgs history.
+- Do not skip manual reproduction in a VM.
+- Do not use only the test-driver prompt when SSH or popup VM windows are
+  available.
+- Do not finish `test.py` with only raw Python `assert` statements when an
+  assertion block fits.
+- Do not check only that an exploit command exits; check the security effect.
+- Do not omit exploit provenance.
+- Do not leave the case README without human manual reproduction commands.
+- Do not bury the automated oracle; point readers to `test.py`.
+
+## 15. Final checklist
 
 Before considering the report done:
 
 - [ ] The vulnerable test demonstrates the exploit or vulnerable behavior.
 - [ ] The fixed test demonstrates mitigation or absence of the vulnerable effect.
 - [ ] The assertion checks the security property, not just command completion.
+- [ ] `test.py` ends with framework assertion blocks where helpers fit.
+- [ ] nixpkgs history was checked before building vulnerable software from source.
+- [ ] Existing nixpkgs packages are used when suitable versions exist.
+- [ ] Exploit provenance is documented.
 - [ ] `flake.nix` uses the appropriate generator.
 - [ ] VM names are clear and match variables in `test.py`.
 - [ ] Any graphical test sets `isGraphics = true` and `enableOCR = true`.
 - [ ] The README explains why the chosen generator fits the age and shape of the vulnerability.
-- [ ] Manual reproduction steps are documented when standalone VMs or SSH scenarios are needed.
+- [ ] Manual reproduction steps use scenario SSH, popup VMs, or standalone VMs.
 - [ ] Any old-kernel test uses `oldKernelTestsGenerator` unless it needs custom low-level behavior.
 - [ ] The case README explains the topology, exploit, assertions, and commands.
+- [ ] The case README points to `test.py` as the automated oracle.
 - [ ] Generated logs, `result` symlinks, `.qcow2` files, and `.nixos-test-history` are not accidentally committed.
 
-## 15. References
+## 16. References
 
 - [NixOS/nixpkgs#47684](https://github.com/NixOS/nixpkgs/pull/47684)
 - [NixOS/nixpkgs#225313](https://github.com/NixOS/nixpkgs/pull/225313)
 - [NixOS Wiki: Flakes](https://nixos.wiki/wiki/Flakes)
 
-## 16. Handoff note template (for LLM agents)
+## 17. Handoff note template (for LLM agents)
 
 When handing off a report, summarize:
 

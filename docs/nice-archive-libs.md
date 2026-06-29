@@ -62,17 +62,16 @@ Every generated VM points to a `configPath`. That file should be a function
 returning a NixOS module:
 
 ```nix
-{ 
-isVulnerable, 
-isTest ? false, 
-isScenario ? true, 
-isGraphics ? false, 
-isOldKernelVM ? false, 
-pkgs, 
-config, 
-lib, 
-modulesPath, 
-...
+{ isVulnerable
+, isTest ? false
+, isScenario ? true
+, isGraphics ? false
+, isOldKernelVM ? false
+, pkgs
+, config
+, lib
+, modulesPath
+, ...
 }:
 { pkgs, lib, ... }:
 
@@ -91,7 +90,7 @@ usual NixOS module argument set.
 | `isVulnerable` | `true`, `false`, or `null` for invariant VMs. |
 | `isTest` | `true` in NixOS tests, `false` for standalone VMs. |
 | `isScenario` | `true` for interactive scenarios and standalone VMs, `false` for automated tests. |
-| `isGraphics` | Whether the generated VM should use graphical QEMU output. For tests, they are `false` by default. |
+| `isGraphics` | Whether the generated VM should use graphical QEMU output. For tests, it is `false` by default. |
 | `isOldKernelVM` | Whether the VM is being generated for old-kernel compatibility. |
 | `pkgs`, `config`, `lib`, `modulesPath` | NixOS module context values passed through by the template. |
 | `...` | Values provided through `extraArgs`. |
@@ -509,6 +508,12 @@ Python package to the NixOS test environment.
 import assertion_blocks as ab
 ```
 
+Assertion blocks should be used as the final oracle of a test whenever a helper
+matches the vulnerability class. It is fine to use raw `assert` for control
+flow or branch checks, but the final proof should usually be an
+`assertion_blocks` helper so logs clearly show what security property was
+checked.
+
 Available helpers:
 
 | Helper | Purpose |
@@ -524,12 +529,90 @@ Available helpers:
 | `check_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5)` | Check average execution time within a tolerance. |
 | `check_core_dump_exists(machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command="")` | Find a matching systemd core dump. |
 
-Example:
+### Choosing assertion blocks by attack type
+
+Use existing cases as models:
+
+| Vulnerability or proof type | Preferred assertion blocks | Model cases |
+| --- | --- | --- |
+| Privilege escalation | `check_root_gid` | Dirty COW, PwnKit, chwoot |
+| DoS / infinite loop / CPU exhaustion | `check_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
+| Memory exhaustion | `check_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
+| File write, overwrite, deletion, or preservation | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
+| Information disclosure | `check_file_contains`, optionally `check_file_size_equals` | Heartbleed, GitLab secret snippet |
+| Service crash or fatal signal | `check_core_dump_exists`, `check_service_log_contains` | sysstat double free, TensorFlow FPE, curl SASL crash |
+| Log or request exfiltration | `check_service_log_contains`, `check_file_contains` | Tomcat SSI XSS, Early CCS MITM |
+| Graphical/UI proof | `check_screen_text` | LibreOffice graphical RCE |
+| Timing side channel or delay proof | `check_exact_execution_time` | WordPress SQLi timing-style test |
+
+### Privilege escalation example
 
 ```python
 import assertion_blocks as ab
 
-ab.check_file_exists(server, "/tmp/result")
-ab.check_file_contains(server, "/tmp/result", "Pwned!")
 ab.check_root_gid(server, "newuser")
+```
+
+### DoS / CPU exhaustion example
+
+Use this style for bugs where the vulnerable command consumes CPU until it is
+limited by `prlimit`. The curl WebSocket loop and OpenSSL BN_mod_sqrt tests are
+good models.
+
+```python
+import assertion_blocks as ab
+
+ab.check_cpu_usage_high(
+    client,
+    command="start-client",
+    maximum_cpu_time_usage="30",
+)
+```
+
+### File write/delete example
+
+Use both positive and negative assertions when the fixed behavior should
+preserve or reject files.
+
+```python
+if variant == "vulnerable":
+    ab.check_file_contains(server, f"{workdir}/hacked", "NICE-CVE-WRITE")
+    ab.check_file_exists(server, f"{workdir}/hacked2")
+else:
+    assert variant == "fixed", f"Unknown variant marker: {variant}"
+    ab.check_file_exists(server, f"{workdir}/hacked2", is_existing=False)
+    ab.check_file_contains(server, f"{workdir}/hacked", "protected original")
+```
+
+### Information disclosure example
+
+```python
+ab.check_file_size_equals(attacker, dump_file, dump_length)
+ab.check_file_contains(attacker, dump_file, secret_key)
+```
+
+### Crash/core-dump example
+
+```python
+ab.check_service_log_contains(
+    machine=server,
+    unit="sysstatSetup.service",
+    check_message="free(): double free detected",
+)
+ab.check_core_dump_exists(
+    machine=server,
+    unit_name="sysstatSetup.service",
+    expected_signal="ABRT",
+)
+```
+
+### Graphical/OCR example
+
+```python
+libreoffice.wait_for_x()
+ab.check_screen_text(
+    libreoffice,
+    "Hello, you have been pwned!",
+    timeout=60,
+)
 ```
