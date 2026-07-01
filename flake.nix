@@ -1,9 +1,12 @@
 {
   description = "Run a Python script with nix run";
 
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nix-versions.url = "github:denful/nix-versions";
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nix-versions }:
     let
       systems = [
         "x86_64-linux"
@@ -34,6 +37,8 @@
 
           runtimePath = pkgs.lib.makeBinPath runtimePackages;
 
+          nixVersions = nix-versions.packages.${system}.default;
+
           nice-archive = pkgs.writeShellScriptBin "nice-archive" ''
             export PATH=${runtimePath}:$PATH
 
@@ -41,7 +46,7 @@
           '';
         in
         f {
-          inherit pkgs pythonEnv runtimePackages nice-archive;
+          inherit pkgs pythonEnv runtimePackages nixVersions nice-archive;
         });
     in
     {
@@ -58,11 +63,12 @@
         default = self.apps.${system}.nice-archive;
       });
 
-      devShells = forEachSystem ({ pkgs, pythonEnv, runtimePackages, ... }: {
+      devShells = forEachSystem ({ pkgs, pythonEnv, runtimePackages, nixVersions, ... }: {
         default = pkgs.mkShell {
           packages = [
             pythonEnv
             pkgs.git
+            nixVersions
           ] ++ runtimePackages;
 
           shellHook = ''
