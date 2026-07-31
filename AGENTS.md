@@ -120,3 +120,27 @@ Do not ask questions that can be answered by reading the repository, docs, exist
 Never fabricate successful builds, exploit results, passing tests, URLs, commit hashes, Nixpkgs attributes, or version ranges.
 
 If blocked, leave a useful partial implementation and clearly explain the blocker.
+
+Interactive mode: driving VMs as an agent
+
+The interactive scenario (nice-archive scenario, or nix run .#start-scenario-vulnerable-<bool>-<system>) drops you into the NixOS test driver's IPython/prompt_toolkit REPL. This REPL is hard to drive programmatically: the pseudo-terminal periodically injects a CSI window-size report (an escape sequence like \x1b[8;<rows>;<cols>t) at the prompt. Its ESC byte gets consumed but the remainder leaks into the input buffer as literal text (for example [8;30;80t). The leading [ opens a Python list literal, which traps IPython in a "...:" continuation and produces "SyntaxError: invalid decimal literal". A human just deletes the spurious characters (backspace) or presses Ctrl+C, but an agent whose only input primitive appends text + Enter cannot reliably send those control keys, so every subsequent line gets corrupted.
+
+Do not fight the REPL. Use these workarounds instead:
+
+1. Preferred: use the SSH backdoor. Interactive tests are generated with interactive.sshBackdoor.enable = true, so on startup the driver prints one SSH command per VM, for example:
+
+       server:  ssh -o User=root vsock-mux//run/user/<uid>/<tmp>/server_host.socket
+
+   From a SEPARATE terminal, run commands inside the VM non-interactively, fully bypassing the REPL:
+
+       ssh -o User=root -o StrictHostKeyChecking=no "vsock-mux//run/user/<uid>/<tmp>/server_host.socket" 'your command here'
+
+   This requires systemd-ssh-proxy (default on NixOS 25.05+). If you lose the socket path, call dump_machine_ssh() in the REPL to reprint the SSH commands.
+
+2. The very first REPL line still executes cleanly before the corruption appears. Use it only to boot the machines, then switch to SSH:
+
+       start_all(); server.wait_for_unit("multi-user.target")
+
+3. To recover a REPL stuck on the "...:" continuation prompt, send an empty line to force the pending SyntaxError and return to a fresh prompt. This does not stop the next line from being re-corrupted, but it is useful before exiting.
+
+4. For anything that needs a machine-checkable oracle, do not rely on interactive input at all: put the assertions in test.py and run nice-archive test (the non-interactive driver runs the whole script server-side and is not affected by this bug). Reserve interactive mode for manual exploration via SSH.
