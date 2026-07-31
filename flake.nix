@@ -69,6 +69,7 @@
             pythonEnv
             pkgs.git
             nixVersions
+            pkgs.nodejs
           ] ++ runtimePackages;
 
           shellHook = ''
