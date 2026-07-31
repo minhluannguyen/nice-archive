@@ -11,3 +11,4 @@ target
 .nixos-test-history
 
 *.log
+node_modules/
