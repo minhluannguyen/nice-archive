@@ -127,42 +127,80 @@ changed:
 - original advisory URL;
 - upstream patch or commit, if known;
 - exploit source URL, if copied or adapted;
-- whether the exploit was copied, modified, simplified, or rewritten;
+- whether the exploit was copied, modified, simplified, rewritten in place, or
+  used as the basis for a new recipe-local `exploit/<helper>`;
 - why any changes were needed for the NixOS VM environment; and
 - any safety limits added for automated testing.
 
 This information belongs in the CVE README, not only in code comments.
 
+Keep final exploit code under the case's `exploit/` directory. It is fine to
+adapt a copied PoC in place, or to write a new helper based on the supplied
+PoC, when the original script does not fit the VM environment or the test
+oracle. When a new helper is derived from a supplied PoC, document the source
+PoC/artifact it is based on, and make VM modules reference the final
+recipe-local helper path, such as `./exploit/trigger.py`.
+
+The exploit source code should only handle practical or realistic inputs. Branching for tests should be avoided; test logic belongs in `test.py` instead. For example, if the exploit is expected to crash or fail on a fixed version, the exploit should not catch the crash and print "failed" or "success"; that must be handled by the test script.
+
 ### Package source strategy
 
 Before building vulnerable software from source, check whether nixpkgs already
-contains the vulnerable and fixed versions.
-
-Useful tools:
-
-- [Nix package versions](https://lazamar.co.uk/nix-versions/)
-- [nix-versions](https://github.com/denful/nix-versions)
-- Nixpkgs Git history on GitHub
-
-Example:
+contains the vulnerable and fixed versions. The tool `nix-versions` can help find historical nixpkgs revisions with the right versions, it has already been added to the repository and can be used with:
 
 ```bash
-nix shell github:denful/nix-versions -c nix-versions --nixhub --all gzip
+# In the repository root, searching for curl version 7.83:
+$ nix-versions 'bin/curl@7.83'
+Name            Version  NixInstallable                  VerBackend  
+curlWithGnuTls  7.83.1   nixpkgs/d57f20b#curlWithGnuTls  nixhub      
+curlMinimal     7.83.0   nixpkgs/7c035db#curlMinimal     nixhub      
+curlMinimal     7.83.1   nixpkgs/78e748f#curlMinimal     nixhub      
+curlFull        7.83.0   nixpkgs/556ce9a#curlFull        nixhub      
+curlFull        7.83.1   nixpkgs/78e748f#curlFull        nixhub  
 ```
 
-Use this priority order:
+`nix-versions` uses many sources to find historical nixpkgs revisions, you can check them directly:
+- [Nixpkgs History](https://history.nix-packages.com)
+- [NixHub](https://nixhub.io)
+- [Lazamar](https://lazamar.co.uk/nix-versions/)
 
-1. Prefer an existing nixpkgs package at a historical nixpkgs revision.
-2. For normal user-space packages, follow the Heartbleed style: fetch or select
-   the historical package inside the VM module, usually with
-   `builtins.fetchTarball` and `import`.
-3. If the vulnerable component is a system-level component, distribution
-   service, kernel, or tightly coupled dependency set, use `variant = "system"`
-   or an old-kernel generator.
-4. Use `overrideAttrs` when nixpkgs has the package but needs a small source or
-   version adjustment.
-5. Build from source only after nixpkgs history does not provide a suitable
-   package/version.
+Run `nix-versions --help` or visit their [documentation](https://nix-versions.alwaysdata.net/getting-started/installing/) for more details.
+
+Use this priority order:
+1. Prioritize existing nixpkgs packages at historical nixpkgs revisions unless the package is a system-level component, distribution service, kernel, or tightly coupled dependency set.
+2. For normal user-space packages, fetch or select the historical package inside the VM configuration, for example:
+
+```nix
+let 
+  opensslTarballInfo = if isVulnerable then 
+  {
+    # 1.0.1f - vulnerable
+    url = "https://github.com/NixOS/nixpkgs/archive/ab6453c483e406b07c63503bca5038838c187ecf.tar.gz";
+    sha256 = "sha256:0zfkymyg0l5ihnyj1nlm14fs7z109ah6hbid7l0i3f0g80s1pbq2";
+  } else 
+  {
+    # 1.0.1g - not vulnerable
+    url = "https://github.com/NixOS/nixpkgs/archive/caa9007e847102d013203b547d1ce67bcd77e89a.tar.gz";
+    sha256 = "sha256:0byrsw6pmqci2vb6b98w02vpc8k09kj4xl2qlm3myxfsyxpq553r";
+  };
+
+  opensslPkgs = (import (builtins.fetchTarball {
+    url = opensslTarballInfo.url;
+    sha256 = opensslTarballInfo.sha256;
+  }) { system = "x86_64-linux"; }).openssl;
+in
+{
+  environment.systemPackages = with pkgs; [
+    opensslPkgs
+  ];
+}
+```
+The commit hashes fetched from `nix-versions` can be used to update the `url` line in the code above. The hashes (sha256) can be calculated with `nix-prefetch-url <url> --unpack` or leave it empty and then `nix build/nix run` will fail with the correct hash, use it to update the hash in the code. See [Heartbleed](../cves/cve-2014-0160-heartbleed/) for a working example.
+
+3. If the vulnerable component is a system-level component, distribution service, kernel, or tightly coupled dependency set, use `variant = "system"`
+   or an old-kernel generator. See [chwoot](../cves/cve-2025-32463-chwoot/) for a working example.
+4. Use `overrideAttrs` when nixpkgs has the package but needs a small source or version adjustment.
+5. Build from source only after nixpkgs history does not provide a suitable package/version. See [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/) for a working example of building from source.
 
 Keep package-selection logic close to the VM that needs it. Avoid moving
 user-space package selection into the top-level `flake.nix` unless the whole
@@ -411,7 +449,7 @@ patterns:
   `pkgs.writeScriptBin`; or
 - configure systemd services for vulnerable servers.
 
-### Server VM pattern
+### Example: Server VM pattern
 
 ```nix
 { isVulnerable, listenPort ? 8080, ... }:
@@ -437,7 +475,7 @@ in
 }
 ```
 
-### Attacker VM pattern
+### Example: Attacker VM pattern
 
 ```nix
 { ... }:
@@ -457,6 +495,12 @@ in
   ];
 }
 ```
+
+#### Important notes:
+
+- Keep the exploit code under `./exploit/` in the case directory.
+- If PoC code is copied or adapted, reference the original source using comments and the recipe README.
+- Note that the file path system of NixOS is not the same as a conventional Linux FHS. Packages are installed in the Nix store, and `/bin`, `/usr/bin`, and `/usr/local/bin` may not exist or may not contain the expected binaries. If these binaries are installed, there will be symlinks to the Nix store paths from `/run/current-system/sw/bin/`. So if you need to run a binary from a package, use the Nix store path or the symlink in `/run/current-system/sw/bin/` instead of assuming it is in `/bin` or `/usr/bin`. See [CVE-2020-7247](../cves/cve-2020-7247-opensmtpd/exploit) for an example of a case that uses the symlink path to run a binary (`touch`).
 
 ## 7. Write `test.py`
 
@@ -531,6 +575,11 @@ ab.check_file_contains(attacker, "/tmp/leak.txt", "secret")
 ab.check_root_gid(server, "newuser")
 ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
+
+Some important points:
+- The test is also a list of steps for a human to reproduce the exploit manually. Keep the test
+  readable and understandable, don't use overly complex Python constructs.
+- The test should handle both vulnerable and fixed variants.
 
 ## 8. Add standalone VMs when useful
 
@@ -829,6 +878,7 @@ fits this CVE.
 - Advisory:
 - Patch or fixing commit:
 - Exploit source:
+- Derived helper source artifact, if rewritten:
 - Local changes made for this VM:
 - Safety limits or simplifications:
 
@@ -872,6 +922,8 @@ the CLI knows the modern output naming convention and legacy fallback.
 Avoid making human reproduction depend on the test-driver Python prompt unless
 there is no practical alternative. Prefer scenario SSH or standalone VM shell
 commands for README instructions.
+
+If you are LLM agent generating a new CVE report, the README should contain information about you, e.g., the LLM model, AI harness tool, date, etc.
 
 ## 14. LLM failure modes to avoid
 
