@@ -1,102 +1,246 @@
-## Full task description:
+# LLM CVE Reproduction Prompt
 
-You are an autonomous cybersecurity research agent working inside my local research repository.
+The repository-level [`AGENTS.md`](../AGENTS.md) defines the complete agent
+contract. In an agent environment that reads `AGENTS.md`, the minimal request
+is:
 
-Your task is to use my vulnerability-reproduction framework to reproduce the CVE I provide.
+```text
+Reproduce CVE-YYYY-NNNN
+```
 
-The framework is intended for isolated, machine-checkable reproduction of historical software vulnerabilities, preferably using Nix, NixOS tests, VMs, containers, and deterministic test oracles.
+Use the full template below when the agent does not automatically load
+repository instructions or when the task needs explicit constraints.
 
-The CVE to reproduce is: CVE-2021-41773
+## Full Prompt Template
 
-Work only inside this repository unless explicitly necessary. Do not modify unrelated user projects or global system configuration.
+```text
+You are an autonomous cybersecurity research agent working inside my local
+NICE Archive research repository.
 
-Main objective
+Reproduce this vulnerability:
 
-Study the framework, understand how existing CVE cases are structured, and then add a new reproducible case for the given CVE.
+CVE: CVE-YYYY-NNNN
+User interactive shell: <bash, zsh, fish, or other>
 
-The final result should let me run the case through the NICE Archive CLI and obtain a machine-checkable test result showing the vulnerable behavior.
+The framework is intended for isolated, machine-checkable reproduction of
+historical software vulnerabilities using Nix, NixOS tests, VMs, containers,
+and deterministic test oracles.
 
-First steps
+Work only inside this repository except for read-only upstream research and
+downloads required by Nix. Do not modify unrelated projects or global system
+configuration. Never run vulnerable target software, PoCs, exploit triggers,
+malicious inputs, crash tests, or resource-exhaustion tests in the current
+agent session or directly on the host.
 
-Start by inspecting the repository and reading the docs, they will guide you on how reproduce a CVE case in a way that is compatible with the framework.
+Preflight
 
+Before exploring the repository:
+
+1. Run git status and preserve unrelated user changes.
+2. Record the user's interactive shell and the shell actually used by the
+   command-execution tool as separate values. Environment or tool metadata is
+   authoritative for the command runner; $SHELL alone is not.
+3. State which shell syntax commands will use.
+4. Record a UTC start timestamp.
+5. Record the runtime-reported LLM model, agent harness, and whether token and
+   cost metrics are available. Do not guess unavailable metadata.
+6. Search for an existing case with the same CVE ID. Complete it in place when
+   it represents the same vulnerability.
+
+Shell execution gate
+
+Do not run shell-dependent commands until the command-runner shell is known.
+Until then, use only direct, non-interactive, single-program invocations. Do
+not use pipelines, &&, ||, semicolons, redirection, heredocs, command
+substitution, shell variables, globs, aliases, or functions.
+
+After identifying the runner, either use syntax compatible with it or invoke a
+specific interpreter without startup files, for example:
+
+- bash --noprofile --norc -c '<command>'
+- zsh -f -c '<command>'
+- fish --no-config -c '<command>'
+
+Never launch an interactive or login shell for automation, source the user's
+shell configuration, or wait for a shell prompt. Scripts must declare and use
+their intended interpreter; do not source a Bash script from Fish or Zsh.
+Commands written for the human user must match the user's recorded shell or
+explicitly name the interpreter.
+
+Every command-execution call must have a finite deadline. Long-lived scenarios
+must use a managed session, a bounded readiness check, and an explicit
+termination step. If a command asks for input or stops making progress,
+terminate it at the deadline and fix the invocation instead of waiting
+indefinitely.
+
+Required reading
 
 Read at least:
 
 README.md
+AGENTS.md
 docs/README.md
 docs/reporting-vulnerabilities.md
 docs/nice-archive-libs.md
 nice-archive.py
 
-Then inspect similar existing cases under:
+Inspect only a few relevant existing cases under cves/. Choose them by shared
+software type, topology, packaging strategy, generator, or oracle. Do not
+implement anything until you understand case organization, flake outputs, VM
+variants, test.py, assertion_blocks, and the NICE Archive CLI.
 
-cves/
+Research
 
-Do not implement anything until you understand:
+Research the CVE using reliable sources. NVD is a starting point, not the sole
+source. Look for the upstream advisory, fixing commit or patch, release notes,
+upstream regression tests, public PoCs, distribution advisories, and nixpkgs
+history.
 
-how cases are named and organized;
-how flake.nix is written;
-how VM modules are structured;
-how vulnerable/fixed variants are selected;
-how test.py assertions work;
-how the CLI runs tests, scenarios, and standalone VMs.
-Implementation task
+Determine and document:
 
-Create a new case under:
+- affected software and versions;
+- fixed version or commit;
+- root cause and vulnerability class;
+- required configuration and runtime preconditions;
+- Linux and NixOS applicability;
+- expected vulnerable and fixed behavior;
+- PoC or regression-test availability;
+- Nix/NixOS package strategy.
+
+Verify all URLs, commit hashes, version ranges, package attributes, nixpkgs
+revisions, and source hashes. Never fabricate missing facts.
+
+PoC policy
+
+Reuse a supplied or publicly available PoC or upstream regression test whenever
+one exists. You may modify, simplify, wrap, or rewrite it to run
+deterministically in the framework, but preserve attribution and document each
+meaningful change.
+
+If no usable PoC exists, you may write a minimal trigger derived directly from
+the CVE description, upstream advisory, fixing patch, or regression test. Cite
+the authoritative basis for every trigger step. Do not invent an independent
+exploit technique or write an unrelated PoC from scratch.
+
+Keep final trigger code under the case's exploit/ directory. The trigger should
+exercise the vulnerability; vulnerable and fixed expectations belong in
+test.py.
+
+Isolation gate
+
+Before running any vulnerable target, PoC, trigger, or malicious test input:
+
+1. State the isolation boundary.
+2. Explain why it is appropriate for the vulnerability class.
+3. Confirm the next command executes inside that boundary.
+4. Restrict networking and host mounts to the minimum required.
+5. Use guest-only fixtures and secrets.
+
+Prefer a NixOS test VM or standalone VM. A container is acceptable only for a
+user-space vulnerability that cannot exercise the host kernel, container
+runtime, devices, or host privileges. Kernel bugs, local privilege escalation,
+system services, destructive behavior, resource exhaustion, and uncertain
+PoCs require a VM.
+
+A nix-shell or nix develop environment isolates dependencies but is not a
+security boundary. It may build or launch the lab, but it does not authorize
+running vulnerable software or PoCs on the host. Use NixOS test-driver machine
+methods, SSH into a generated VM, or container exec into a purpose-built
+container so the execution boundary is explicit.
+
+Host-side work is limited to source review, file edits, safe metadata queries,
+sandboxed builds, and launching or controlling the lab. Never bind a vulnerable
+service to a host port or use host localhost as the exploit target. If the
+isolated environment cannot be started, stop before executing the trigger and
+report the blocker. Do not fall back to testing in the current session.
+
+Implementation
+
+Create or complete:
 
 cves/cve-yyyy-nnnn-short-name/
 
-Follow the style of existing cases.
+Follow existing case style. Prefer historical nixpkgs packages found with
+nix-versions over source builds. Usually use nice-archive-lib.testsGenerator;
+use another generator only when the documentation or target environment
+requires it.
 
-Use the framework’s recommended generator and tools, usually nice-archive-lib.testsGenerator, unless the docs or similar cases suggest another approach.
+Choose the smallest faithful VM topology. Keep helper VMs invariant when
+possible and make vulnerable and fixed variants differ only where required.
 
-Research requirements
+Manual validation must happen before finalizing test.py:
 
-Before coding, research the CVE using reliable sources:
+1. Start the vulnerable scenario or standalone VMs through the NICE Archive
+   CLI.
+2. Use the printed SSH command, popup VM, or test-driver shell.
+3. Verify target health and run the trigger manually.
+4. Repeat against the fixed variant with the same trigger.
+5. Translate the observed workflow into test.py.
 
-NVD
-upstream advisory
-fixing commit
-release notes
-public PoC or regression test
-distribution advisories
-Nixpkgs history
+Timeout policy
 
-Determine:
+Give every network request, polling loop, VM wait, and potentially blocking
+trigger an explicit finite timeout. Fixed-variant checks must not wait forever.
+Use bounded guest commands such as timeout, explicit test-driver deadlines, and
+attempt or elapsed-time limits for custom loops.
 
-affected software and versions;
-fixed version;
-root cause;
-required configuration;
-Linux applicability;
-PoC availability;
-expected vulnerable behavior;
-expected fixed behavior;
-Nix/NixOS packaging strategy.
-
-Do not rely on NVD alone.
+Give host-side builds and tests a finite but realistic deadline that accounts
+for first-time Nix downloads and compilation. When a timeout occurs, collect
+diagnostics and report it as a failure or blocker. A timeout alone is not proof
+that the fixed variant is secure.
 
 Test oracle
 
-The reproduction must have a clear machine-checkable oracle.
+The reproduction needs an independent machine-checkable oracle that proves the
+security property, not merely command completion or exploit output. The
+vulnerable branch must demonstrate the effect. The fixed branch must apply the
+same trigger, prove the effect is absent, and verify the target remained
+healthy.
 
-Prioritize using publicly available exploit (with minor modification). If not found then can generate exploit.
+End each test branch with a suitable assertion_blocks helper whenever one
+applies. If none applies, use a deterministic direct assertion and explain why
+in the case README.
 
-Good oracles include:
+Validation
 
-marker file created inside the VM;
-controlled privilege-boundary crossing inside the VM;
-expected crash or core dump;
-expected service log;
-vulnerable output differs from fixed output;
-upstream regression test fails on vulnerable and passes on fixed.
+Run both variants through the NICE Archive CLI:
 
-Do not use vague success criteria such as “the command ran” or “the exploit printed success” unless independently verified.
+nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
+nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
 
-It is mandatory to use provided assertion block at the end of the test unless it is un applicable.
+Do not claim success unless these commands were actually run and the output
+supports the claim. Review git status afterward because CLI test and scenario
+commands may stage case files.
 
-Do not claim success unless you actually ran the command or have direct evidence from tool output.
+Case README
+
+Document the CVE facts, sources, topology, generator, package pins, PoC
+provenance, changes, safety limits, exact manual commands, automated commands,
+oracle, observed results, and limitations.
+
+After validation, add a Reproduction metadata section stating that the CVE was
+reproduced by an LLM agent. Include:
+
+- exact runtime-reported model;
+- agent or coding harness;
+- reproduction date;
+- command shell;
+- UTC start and end timestamps and elapsed wall-clock time;
+- input, output, and total tokens;
+- monetary cost and currency;
+- telemetry source for each available or unavailable value.
+
+Record the source of each telemetry value: runtime, UI, user-provided,
+calculated, or not exposed by the harness. Use "not available (not exposed by
+harness)" when the agent cannot access a value. This is expected in some IDE
+chat integrations, including Copilot Chat configurations that provide no
+per-task usage telemetry to the agent, and it must not block completion.
+
+Never estimate tokens from text length or context size. Do not divide a
+subscription price across a run. If cost is calculated from known token counts,
+label it as an estimate and cite the model pricing source, currency, and date.
+Do not inspect hidden files or query unrelated services in an attempt to obtain
+missing telemetry.
 
 Final report
 
@@ -113,84 +257,37 @@ PoC or trigger:
 Oracle:
 Commands run:
 Results observed:
+Reproduction metadata:
 Known limitations:
 Safety notes:
 References:
-Important rules
 
-Do not ask questions that can be answered by reading the repository, docs, existing cases, CVE sources, or Nixpkgs history.
+Do not ask questions that can be answered from the repository, documentation,
+existing cases, authoritative CVE sources, or nixpkgs history.
 
-Never fabricate successful builds, exploit results, passing tests, URLs, commit hashes, Nixpkgs attributes, or version ranges.
+If blocked, leave a coherent partial implementation. Report the exact failing
+command, relevant output, what was and was not verified, and the next concrete
+step. Never recast a partial result as success.
+```
 
-If blocked, leave a useful partial implementation and clearly explain the blocker.
+## Supplied Evidence Or PoC
 
+Append this block when providing facts, a patch, regression test, or PoC with
+the request:
 
-## Prompt with CVE details and PoC:
+```text
+Use the supplied facts and artifacts below as the starting point. Reuse the
+provided PoC rather than searching for or inventing another exploit. You may
+modify, reduce, wrap, or rewrite it only as needed for deterministic execution
+inside NICE Archive. Preserve attribution and document all meaningful changes.
 
-You are an autonomous cybersecurity research agent working inside my local research repository.
+If the artifact is incomplete, derive only the missing trigger steps directly
+from the supplied CVE description, advisory, patch, or regression test. Do not
+invent an independent exploitation technique from scratch.
 
-Your task is to use my vulnerability-reproduction framework to reproduce the CVE I provide.
+Supplied facts:
+<affected versions, fixed version, preconditions, expected behavior>
 
-Before editing, run git status and inspect the target case directory if it exists.
-Preserve unrelated user changes.
-
-Create or complete this case:
-
-CVE-2024-23334
-
-Here are the information and the public PoC you can use to reproduce the CVE, you don't need to search for new exploits or more information, just use the provided ones and adapt them to the framework if necessary.
-
-| Fact                         | Example                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| CVE ID                       | `CVE-2024-23334`                                                                                                           |
-| Affected software            | `aiohttp`, specifically `aiohttp.web` static-file serving                                                                  |
-| Vulnerable version or commit | `aiohttp < 3.9.2`; practical target: `3.9.1` with `web.static(..., follow_symlinks=True)`                                  |
-| Fixed version or commit      | `aiohttp 3.9.2`; upstream fix commit `1c335944d6a8b1298baf179b7c0b3069f10c514b`                                            |
-| Vulnerability class          | directory traversal / path traversal, `CWE-22`                                                                             |
-| Exploit precondition         | application uses aiohttp as a web server and exposes a static route with `follow_symlinks=True`                            |
-| Attacker type                | remote unauthenticated HTTP client, if the vulnerable static route is publicly reachable                                   |
-| Success condition            | attacker reads a file outside the configured static root, e.g. a private file elsewhere on the filesystem                  |
-| Fixed behavior               | traversal paths are rejected; the upstream regression test expects `404 Not Found` for requests such as `/../private_file` |
-
-Steps to reproduce:
-
-For reproduction, the clean lab setup is: create a temporary directory with safe_dir/ as the static root and a sibling file like private_file; serve safe_dir with:
-
-app.router.add_static("/", str(safe_path), follow_symlinks=True)
-
-Then send a raw HTTP request such as:
-
-GET /../private_file HTTP/1.1
-Host: localhost
-
-On a vulnerable version, success is reading the private file content. On the fixed version, the request should return 404 Not Found; aiohttp’s patch added regression tests for exactly this kind of traversal case.
-
-Do not invent a new exploit. You may adapt the provided PoC only to make it work inside the framework.
-
-Read at least:
-
-README.md
-docs/README.md
-docs/reporting-vulnerabilities.md
-docs/nice-archive-libs.md
-nice-archive.py
-
-Then inspect similar existing cases under, don't read everything at once just have a look so that you know which to look for when you encounter similar cases:
-
-cves/
-
-Please ignore directory with the same CVE ID, if it exists, as it is a different CVE and rename your case directory to avoid conflicts.
-
-Prioritize using packages, options from Nixpkgs, and avoid building from source unless necessary.
-
-Dont try to read too long files at once unless necessary. Focus on the files that are relevant to the CVE case.
-
-Debugging workflow:
-1. Implement the case.
-2. Start the scenario with the NICE Archive CLI.
-3. SSH into the printed VM commands.
-4. Manually run the exploit/trigger.
-5. Only after manual reproduction works, encode the workflow in test.py.
-6. End test.py with suitable assertion_blocks helpers.
-
-Do not stop unless the plan have been fully implemented and tested/executed. If you encounter a blocker, leave a useful partial implementation and clearly explain the blocker.
+Supplied artifacts and sources:
+<URLs, files, PoC, patch, or regression test>
+```

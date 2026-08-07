@@ -38,20 +38,23 @@ need more.
 
 If you are an LLM agent working on a new report, follow this order:
 
-1. Do read-only discovery first.
-2. Identify vulnerable and fixed versions.
-3. Record exploit provenance before copying or adapting exploit code.
-4. Search nixpkgs history before building vulnerable software from source.
-5. Design the VM topology.
-6. Decide which NICE Archive library generator fits.
-7. Implement the Nix files.
-8. Start the VM scenario or standalone VMs and reproduce the vulnerability manually.
-9. Prefer SSH or popup VM windows for manual reproduction.
-10. Translate the successful manual workflow into `test.py`.
-11. End the automated test with suitable `assertion_blocks` helpers.
-12. Run vulnerable and fixed tests.
-13. Update the case README with verified human commands and automated assertions.
-14. Report exactly what changed and what was verified.
+1. Record the user shell and command-runner shell separately, plus UTC start
+   time, model, harness, and which usage metadata the runtime exposes.
+2. Do read-only discovery first.
+3. Identify vulnerable and fixed versions.
+4. Record exploit provenance before copying or adapting exploit code.
+5. Search nixpkgs history before building vulnerable software from source.
+6. Design the VM topology.
+7. Decide which NICE Archive library generator fits.
+8. Implement the Nix files.
+9. Start the VM scenario or standalone VMs and reproduce the vulnerability manually.
+10. Prefer SSH or popup VM windows for manual reproduction.
+11. Translate the successful manual workflow into `test.py`.
+12. End the automated test with suitable `assertion_blocks` helpers.
+13. Run vulnerable and fixed tests with finite timeouts.
+14. Update the case README with verified commands, assertions, and LLM
+    reproduction metadata.
+15. Report exactly what changed and what was verified.
 
 ## LLM reproduction contract
 
@@ -62,17 +65,78 @@ requirements:
   building vulnerable software from source.
 - Use `nix-versions` or Nixpkgs history before deciding that a source build is
   necessary.
+- Treat shell detection as a pre-execution gate. Do not run shell-dependent or
+  compound commands until the command runner's interpreter is known.
+- Give every command-execution call a finite deadline and never wait
+  indefinitely for a prompt or a command that stopped making progress.
+- Never execute vulnerable software, PoCs, malicious inputs, or exploit
+  triggers in the coding-agent session or directly on the host.
+- Establish and state a suitable VM or container boundary before running a
+  trigger. Do not fall back to host execution if isolation fails.
 - Follow existing case style before inventing a new structure. Heartbleed is a
   good model for historical user-space packages.
 - Use the scenario helper plus SSH for manual validation when possible.
 - Use standalone VMs for manual validation when the NixOS test driver is not a
   good fit.
 - Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
+- Reuse and adapt an existing PoC when available. If none exists, derive a
+  minimal trigger from authoritative CVE material instead of inventing an
+  independent exploit from scratch.
 - Convert the manual workflow into `test.py`.
 - End `test.py` with framework assertion blocks whenever one fits.
+- Bound VM waits, network operations, exploit processes, and fixed-variant
+  checks with finite timeouts.
 - Add exploit provenance and human manual reproduction commands to the CVE
   README.
 - Point readers to `test.py` as the machine-checkable oracle.
+- Record model, harness, shell, elapsed time, token usage, and cost in the case
+  README. Use `not available (not exposed by harness)` rather than estimating
+  values the runtime does not expose; unavailable telemetry is not a blocker.
+
+### Shell execution gate
+
+The user's interactive shell and the interpreter used by an agent's command
+tool may differ. Record both. Environment or tool metadata is authoritative for
+the command runner; `$SHELL` commonly reports the login shell and does not prove
+which interpreter will parse a command.
+
+Until the runner is known, use only direct, non-interactive, single-program
+invocations. Avoid pipelines, control operators, redirection, heredocs,
+substitution, variables, globs, aliases, and functions. Once known, use syntax
+for that interpreter or select one explicitly without startup files, such as
+`bash --noprofile --norc -c`, `zsh -f -c`, or `fish --no-config -c`.
+
+Do not launch interactive or login shells for automation, source user startup
+files, or wait for a shell prompt. A script must declare and use its intended
+interpreter. Human reproduction commands must match the recorded user shell or
+name the interpreter explicitly.
+
+Every command tool call needs a finite deadline. Long-lived VM scenarios need
+a managed session, bounded readiness checks, and explicit termination. If a
+command unexpectedly requests input or stops progressing, terminate it at the
+deadline and diagnose the shell or invocation.
+
+### Isolation gate
+
+The repository development shell and coding-agent session are part of the host,
+not part of the vulnerability lab. Host work is limited to source review, file
+editing, safe metadata queries, sandboxed Nix builds, and starting or
+controlling isolated environments.
+
+Before executing target software, a PoC, malformed input, crash test, or
+resource-exhaustion trigger, state the selected boundary and confirm the
+command runs inside it. Prefer NixOS test or standalone VMs. Containers are
+appropriate only for user-space flaws that cannot affect the host kernel,
+container runtime, devices, or host privileges. Kernel bugs, local privilege
+escalation, system services, destructive tests, resource exhaustion, and
+uncertain PoCs require a VM.
+
+`nix-shell` and `nix develop` isolate dependencies but are not security
+boundaries. They can build or launch a lab; they do not make host execution of
+a vulnerable program or PoC safe. Use test-driver machine methods, SSH into a
+generated VM, or an explicit container execution command. Restrict networking
+and mounts, use guest-only fixtures, and never target host `localhost`. If the
+lab cannot start, report the blocker instead of falling back to the host.
 
 ## 1. Create a case directory
 
@@ -134,12 +198,17 @@ changed:
 
 This information belongs in the CVE README, not only in code comments.
 
-Keep final exploit code under the case's `exploit/` directory. It is fine to
-adapt a copied PoC in place, or to write a new helper based on the supplied
-PoC, when the original script does not fit the VM environment or the test
-oracle. When a new helper is derived from a supplied PoC, document the source
-PoC/artifact it is based on, and make VM modules reference the final
-recipe-local helper path, such as `./exploit/trigger.py`.
+Keep final exploit code under the case's `exploit/` directory. Reuse a supplied
+or public PoC whenever one is available. It is fine to modify, simplify, wrap,
+or rewrite that PoC when the original does not fit the VM environment or test
+oracle, provided the source and changes are documented.
+
+If no suitable PoC is available, derive a minimal trigger directly from the
+CVE description, upstream advisory, fixing patch, or regression test. Do not
+invent a new exploit technique or write an unrelated PoC from scratch. Record
+the authoritative artifact from which the local helper was derived and make VM
+modules reference the final recipe-local path, such as
+`./exploit/trigger.py`.
 
 The exploit source code should only handle practical or realistic inputs. Branching for tests should be avoided; test logic belongs in `test.py` instead. For example, if the exploit is expected to crash or fail on a fixed version, the exploit should not catch the crash and print "failed" or "success"; that must be handled by the test script.
 
@@ -520,7 +589,7 @@ server.wait_for_unit("vulnerable-service.service")
 server.wait_for_open_port(8080)
 
 attacker.wait_for_unit("multi-user.target")
-attacker.succeed("run-exploit http://server:8080")
+attacker.succeed("timeout 30s run-exploit http://server:8080")
 
 ab.check_file_contains(attacker, "/tmp/result.txt", "Pwned!")
 ```
@@ -580,6 +649,31 @@ Some important points:
 - The test is also a list of steps for a human to reproduce the exploit manually. Keep the test
   readable and understandable, don't use overly complex Python constructs.
 - The test should handle both vulnerable and fixed variants.
+
+### Bound waits and blocking triggers
+
+Every wait, polling loop, network operation, and trigger that may block must
+have a finite deadline. Fixed variants need particular care: an exploit that
+hangs after the fix is not by itself proof that the vulnerability is blocked.
+
+Use explicit test-driver timeouts where supported and wrap potentially hanging
+guest commands with `timeout`:
+
+```python
+server.wait_for_unit("vulnerable-service.service", timeout=120)
+server.wait_for_open_port(8080, timeout=60)
+
+status, output = attacker.execute(
+    "timeout --signal=TERM 30s run-exploit http://server:8080"
+)
+assert status != 124, f"exploit timed out instead of producing a result: {output}"
+```
+
+Also set connect and read timeouts inside network PoCs. Bound custom retry loops
+by elapsed time or attempt count. Host-side Nix builds and CLI tests should
+have a finite but realistic deadline that allows for initial downloads and
+builds. On timeout, collect diagnostics and fail clearly; never count a timeout
+alone as a passing fixed result.
 
 ## 8. Add standalone VMs when useful
 
@@ -913,6 +1007,22 @@ assertion blocks used there and what security property each one proves.
 
 ## Assertions
 
+## Reproduction metadata
+
+- Reproduced by: LLM agent
+- Model: `<exact runtime-reported model, or not available with reason>`
+- Agent/harness: `<tool and version, or not available with reason>`
+- Date: `<YYYY-MM-DD>`
+- Command shell: `<bash, zsh, fish, or other>`
+- Start time: `<UTC timestamp, or not available with reason>`
+- End time: `<UTC timestamp, or not available with reason>`
+- Elapsed time: `<measured wall-clock duration, or not available with reason>`
+- Input tokens: `<runtime-reported value, or not available with reason>`
+- Output tokens: `<runtime-reported value, or not available with reason>`
+- Total tokens: `<runtime-reported value, or not available with reason>`
+- Cost: `<platform value, sourced estimate, or not available with reason>`
+- Telemetry source: `<runtime, UI, user-provided, calculated, or not exposed by harness>`
+
 ## References
 ````
 
@@ -923,11 +1033,28 @@ Avoid making human reproduction depend on the test-driver Python prompt unless
 there is no practical alternative. Prefer scenario SSH or standalone VM shell
 commands for README instructions.
 
-If you are LLM agent generating a new CVE report, the README should contain information about you, e.g., the LLM model, AI harness tool, date, etc.
+Complete `Reproduction metadata` after validation. It must state that the case
+was reproduced by an LLM agent and identify the exact model and harness when
+the runtime exposes them. Record start and end timestamps so elapsed time is
+measured rather than guessed.
+
+Token counts and cost often are not visible to the agent. Use `not available`
+with a reason such as `not exposed by harness` for unavailable fields. IDE chat
+integrations, including some GitHub Copilot Chat configurations, may identify
+the harness but expose no exact model, per-task token counts, or billing data to
+the agent. Missing telemetry does not block completion.
+
+Never infer tokens from context size or text length. A subscription price is
+not a per-run cost. If cost is calculated from known token counts, label it as
+an estimate and cite the model pricing source, currency, and pricing date. Do
+not inspect hidden files, query unrelated services, or fabricate metadata to
+make the section look complete.
 
 ## 14. LLM failure modes to avoid
 
 - Do not build vulnerable software from source before checking nixpkgs history.
+- Do not invent an independent PoC when supplied, public, or upstream trigger
+  material can be reused or adapted.
 - Do not skip manual reproduction in a VM.
 - Do not use only the test-driver prompt when SSH or popup VM windows are
   available.
@@ -937,6 +1064,10 @@ If you are LLM agent generating a new CVE report, the README should contain info
 - Do not omit exploit provenance.
 - Do not leave the case README without human manual reproduction commands.
 - Do not bury the automated oracle; point readers to `test.py`.
+- Do not leave waits, network calls, exploit processes, or fixed checks
+  unbounded.
+- Do not guess the model, tokens, cost, shell, or elapsed time in reproduction
+  metadata.
 
 ## 15. Final checklist
 
@@ -949,6 +1080,8 @@ Before considering the report done:
 - [ ] nixpkgs history was checked before building vulnerable software from source.
 - [ ] Existing nixpkgs packages are used when suitable versions exist.
 - [ ] Exploit provenance is documented.
+- [ ] Existing PoC or regression-test material was reused or adapted when
+      available; any derived trigger cites its authoritative basis.
 - [ ] `flake.nix` uses the appropriate generator.
 - [ ] VM names are clear and match variables in `test.py`.
 - [ ] Any graphical test sets `isGraphics = true` and `enableOCR = true`.
@@ -957,6 +1090,11 @@ Before considering the report done:
 - [ ] Any old-kernel test uses `oldKernelTestsGenerator` unless it needs custom low-level behavior.
 - [ ] The case README explains the topology, exploit, assertions, and commands.
 - [ ] The case README points to `test.py` as the automated oracle.
+- [ ] Potentially blocking operations and fixed-variant checks have finite
+      timeouts.
+- [ ] The case README contains LLM model, harness, shell, elapsed time, token,
+      and cost metadata, using `not available` with a reason for unexposed
+      values.
 - [ ] Generated logs, `result` symlinks, `.qcow2` files, and `.nixos-test-history` are not accidentally committed.
 
 ## 16. References

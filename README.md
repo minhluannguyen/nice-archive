@@ -242,6 +242,7 @@ If an output name fails, inspect the case's `flake.nix` or use the CLI first.
 - [Documentation index](./docs/README.md)
 - [NICE Archive library reference](./docs/nice-archive-libs.md)
 - [Reporting a vulnerability with NICE Archive](./docs/reporting-vulnerabilities.md)
+- [LLM CVE reproduction prompt](./docs/LLM-reproduction-prompt.md)
 
 The library reference documents `testsGenerator`, `standaloneVMGenerator`,
 `oldKernelTestsGenerator`, graphical/OCR flags, old-kernel compatibility, and
@@ -258,6 +259,18 @@ agent to research the vulnerability, create or complete its case under
 `cves/`, reproduce it manually in an isolated VM, and verify both vulnerable
 and fixed variants with a machine-checkable oracle. Additional details or a
 preferred PoC can be supplied in the same request.
+
+The contract also makes the agent identify its command shell before exploration,
+reuse or source a PoC from authoritative material, bound potentially blocking
+operations, and record model, harness, elapsed time, token usage, and cost in
+the completed case README. Unavailable runtime metadata must be labeled rather
+than estimated, and missing per-run telemetry does not block completion.
+
+Shell detection and isolation are hard gates: agents must not run compound
+shell syntax before identifying the command interpreter, and must never execute
+vulnerable software or PoCs directly in the current session. `nix develop` and
+`nix-shell` provide dependencies but are not security boundaries; triggers must
+run in an appropriate VM or container.
 
 ## Cleaning generated artifacts
 
