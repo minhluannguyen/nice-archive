@@ -250,6 +250,15 @@ Python assertion helpers.
 The reporting guide is the recommended workflow for adding or updating a CVE
 case.
 
+## Agent-based CVE reproduction
+
+This repository includes [`AGENTS.md`](./AGENTS.md) as the operating contract
+for coding agents. A request such as `Reproduce CVE-YYYY-NNNN` instructs an
+agent to research the vulnerability, create or complete its case under
+`cves/`, reproduce it manually in an isolated VM, and verify both vulnerable
+and fixed variants with a machine-checkable oracle. Additional details or a
+preferred PoC can be supplied in the same request.
+
 ## Cleaning generated artifacts
 
 Test and VM runs can create `result` symlinks, `*.qcow2` disk images, and
