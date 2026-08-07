@@ -24,8 +24,11 @@ proves both vulnerable and fixed behavior.
 - Work only in this repository, except for read-only upstream research and
   downloads required by Nix. Put temporary artifacts in `/tmp` or the case
   directory.
-- Exercise exploits only against VMs or containers created for the
-  reproduction. Never target public systems or unrelated local services.
+- Never execute vulnerable target software, fetched PoCs, malicious inputs, or
+  exploit triggers directly in the agent's current shell or on the host.
+  Execute them only after establishing an appropriate isolation boundary.
+- Never target public systems, host `localhost`, unrelated local services, or
+  any machine not created for the reproduction.
 - Do not change global system or Nix configuration, unrelated user projects,
   or unrelated CVE cases.
 - Run `git status --short` before editing and again before reporting. Preserve
@@ -36,6 +39,94 @@ proves both vulnerable and fixed behavior.
   running them and keep their effects confined to the lab.
 - Do not claim a build, exploit, or test succeeded unless the command was
   actually run and its output directly supports that claim.
+
+## Isolation Gate
+
+The coding-agent session, user terminal, repository development shell, and host
+OS are not test targets. Host-side work is limited to reading and editing files,
+reviewing source, safe metadata queries, sandboxed Nix builds, and launching or
+controlling an isolated environment.
+
+Before running any target binary, PoC, trigger, malformed input, crash test,
+resource-exhaustion test, or vulnerable service:
+
+1. Choose and state the isolation boundary.
+2. Explain why it is suitable for the vulnerability class.
+3. Confirm the command will execute inside that boundary.
+4. Restrict networking and host mounts to the minimum required.
+5. Use guest-only fixtures and secrets.
+
+Prefer a NixOS test VM or standalone VM. A container may be used for a
+user-space vulnerability only when the trigger cannot exercise the host kernel,
+container runtime, devices, or host privileges. Kernel flaws, local privilege
+escalation, system services, destructive tests, and uncertain PoCs require a
+VM.
+
+A `nix-shell` or `nix develop` environment isolates dependencies but is not a
+security boundary. It may be used to build or launch the lab, but it does not
+by itself authorize executing a vulnerable program or PoC on the host. Nix
+build sandboxing may compile untrusted inputs, but the resulting target and
+trigger must still run in a VM or suitable container.
+
+Use an execution path that makes the boundary visible, such as NixOS
+test-driver machine methods, SSH into a generated VM, or `container exec` into
+a purpose-built container. Do not fall back to host execution when isolation
+fails. Leave a partial implementation and report the blocker instead.
+
+## Shell Gate And Environment Record
+
+Before repository exploration, record the following in working notes:
+
+- the user's interactive shell, when exposed by the environment;
+- the shell actually used by the agent's command-execution tool;
+- a UTC start timestamp from the host;
+- the LLM model and agent harness, but only when they are exposed by the
+  runtime;
+- whether the runtime exposes input tokens, output tokens, total tokens, or
+  monetary cost.
+
+Treat the user shell and command-runner shell as separate values. Environment
+metadata or an explicit tool `shell` setting is authoritative for the command
+runner. `$SHELL` usually names the user's login shell and is not sufficient
+proof of which interpreter executes a tool command.
+
+This is a hard pre-execution gate:
+
+- Until the command-runner shell is known, run only direct, non-interactive,
+  single-program commands. Do not use pipelines, `&&`, `||`, `;`, redirection,
+  heredocs, command substitution, shell variables, globs, aliases, or shell
+  functions.
+- Once known, write syntax for that shell or select an interpreter explicitly.
+  Use non-interactive, startup-file-free invocation where available, such as
+  `bash --noprofile --norc -c`, `zsh -f -c`, or `fish --no-config -c`.
+- Never launch an interactive or login shell merely to run automation. Do not
+  wait for a shell prompt, source the user's startup files, or assume aliases
+  and shell functions exist.
+- Prefer direct tool arguments and `nix develop -c <program> <args>` over shell
+  activation snippets.
+- A script with Bash syntax must have a Bash shebang and be invoked with Bash;
+  it must not be sourced by Fish or Zsh. Apply the same rule to every shell.
+- Commands shown for a human must match the recorded user shell or explicitly
+  name the required interpreter.
+
+Every command-execution call must have a finite tool deadline. Commands that
+intentionally stay active, such as VM scenarios, must run in a managed session
+with a bounded readiness check and an explicit termination step. If a command
+unexpectedly requests input or stops producing progress, terminate it at the
+deadline, inspect why, and correct the shell or invocation. Never wait
+indefinitely for a presumed prompt or completion.
+
+Record an end timestamp after validation so elapsed wall-clock time can be
+calculated. Never estimate token counts or billing data from context length or
+elapsed time. If the runtime does not expose a metadata value, record it as
+`not available (not exposed by harness)` rather than guessing.
+
+Usage telemetry is best-effort documentation, not a completion gate. Agent
+environments such as IDE chat integrations may expose no per-task token counts,
+model identifier, or billing data to the agent. Do not search hidden files,
+query unrelated APIs, approximate tokens from text length, or allocate a
+subscription price to one run. Continue the reproduction and record the reason
+the value is unavailable.
 
 ## Required Discovery
 
@@ -166,9 +257,15 @@ change, and `variant = "invariant"` for machines shared by both scenarios.
 
 ## Exploit And Oracle
 
-Prefer a publicly available PoC or upstream regression test with only the
-changes needed for deterministic execution in the NixOS lab. If no suitable
-trigger exists, implement a minimal one based on the documented root cause.
+Reuse a supplied or publicly available PoC or upstream regression test whenever
+one exists. It may be modified, reduced, or wrapped to run deterministically in
+the NixOS lab. Preserve the original security-relevant trigger unless a change
+is required and documented.
+
+If no usable PoC exists, a minimal trigger may be derived directly from the
+CVE description, upstream advisory, patch, or regression test. Do not invent a
+new exploit technique or write an unrelated PoC from scratch. Document the
+authoritative artifact from which each trigger step was derived.
 
 Keep final exploit code under the case's `exploit/` directory. Record:
 
@@ -231,6 +328,24 @@ Work from cheap checks to expensive VM runs:
 11. Update the README with verified commands and observations.
 12. Clean or ignore generated artifacts and inspect `git status --short`.
 
+All waits and potentially blocking triggers must have explicit finite
+deadlines. This is especially important for the fixed variant, where a blocked
+exploit can otherwise wait forever and be mistaken for successful mitigation.
+
+- Give network clients connect and read timeouts.
+- Put a bounded `timeout` around untrusted exploit commands and commands that
+  may hang on the fixed version.
+- Pass explicit timeouts to test-driver polling and wait helpers when the API
+  supports them.
+- Bound custom loops by elapsed time or attempt count and fail with diagnostic
+  output when the limit is reached.
+- Give host-side builds and test runs a finite but realistic deadline. Account
+  for first-time Nix downloads and builds rather than choosing an arbitrarily
+  short limit.
+- On timeout, collect useful service status, journal, process, or network
+  diagnostics and report the timeout. Never report a timeout as a passing
+  fixed result by itself.
+
 Run commands from the repository root, normally inside `nix develop`:
 
 ```bash
@@ -262,7 +377,30 @@ Keep the case `readme.md` self-contained and source-backed. It must cover:
 - exact manual reproduction commands and observed behavior;
 - vulnerable and fixed CLI test commands;
 - the `test.py` oracle and what each assertion proves;
-- verified limitations or environmental caveats.
+- verified limitations or environmental caveats;
+- a reproduction metadata section completed after validation.
+
+The reproduction metadata section must state that the case was reproduced by
+an LLM agent and record:
+
+- LLM model identifier;
+- agent or coding harness;
+- reproduction date;
+- command shell used;
+- UTC start and end timestamps and elapsed wall-clock time;
+- input, output, and total token counts when exposed;
+- monetary cost, currency, and calculation source when exposed or calculated
+  from known token counts and dated model pricing;
+- telemetry source, such as runtime, UI, user-provided, calculated, or not
+  exposed by the harness.
+
+Use `not available (not exposed by harness)` for any value the runtime does not
+expose. For example, a GitHub Copilot Chat run may identify the harness while
+leaving the exact model, per-run tokens, and cost unavailable to the agent.
+If cost is calculated rather than reported by the platform, label it as an
+estimate and record the pricing source and date. A subscription price is not a
+per-run cost. Do not infer or fabricate model identity, tokens, cost, or elapsed
+time, and do not treat unavailable telemetry as a reproduction blocker.
 
 Do not preserve a claim solely because a previous agent wrote it. Correct or
 qualify anything unsupported by sources or command output.
@@ -278,6 +416,8 @@ The task is complete only when all applicable items are true:
 - vulnerable and fixed automated tests both ran and passed;
 - `test.py` checks the security effect with applicable assertion blocks;
 - the README records accurate provenance, commands, results, and references;
+- the README records LLM reproduction metadata with unavailable values clearly
+  identified;
 - no unrelated files or generated VM artifacts are included in the change.
 
 If blocked, leave the most useful coherent partial implementation possible.
