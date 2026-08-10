@@ -67,6 +67,9 @@ their intended interpreter; do not source a Bash script from Fish or Zsh.
 Commands written for the human user must match the user's recorded shell or
 explicitly name the interpreter.
 
+Use expect/pexpect when the workflow genuinely requires a TTY or
+human-style prompt interaction.
+
 Every command-execution call must have a finite deadline. Long-lived scenarios
 must use a managed session, a bounded readiness check, and an explicit
 termination step. If a command asks for input or stops making progress,
@@ -96,6 +99,46 @@ For an interactive scenario, a bounded SSH or test-driver command that returns
 successfully counts as a response even if the scenario terminal has no new
 output. That health check must complete within the five-minute inactivity
 window.
+
+Subagent orchestration
+
+When the agent harness provides subagents, use them for manual scenario
+validation and long-running automated tests. Subagents are execution helpers,
+not decision makers. The main agent remains responsible for research,
+isolation choices, package pins, safety limits, stuck-test decisions,
+documentation, and final claims.
+
+Use this pattern when practical:
+
+1. Start scenario mode with a dedicated scenario subagent:
+
+   nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+
+   The scenario subagent must run the command as a managed long-lived session,
+   capture the printed SSH commands, keep the scenario alive, and report
+   readiness and new output. It must not run the exploit unless explicitly
+   instructed.
+2. Spawn one or more VM-operator subagents to SSH into the printed VM commands.
+   They should perform bounded guest-side health checks, run the exploit or
+   trigger inside the VM, collect logs and oracle evidence, and report exact
+   commands and outputs. They must use only guest fixtures and must never
+   target host localhost or unrelated services.
+3. The main agent monitors the scenario subagent and VM-operator subagents,
+   decides which VM commands to run next, records manual vulnerable and fixed
+   observations, and explicitly terminates the scenario when done.
+4. Repeat the same scenario-driven workflow for the fixed variant.
+
+Attempt scenario mode before falling back to standalone VMs, unless the case
+generator does not expose interactive scenarios or repository documentation
+shows that standalone VMs are required.
+
+For automated validation, spawn a test-runner subagent for each long-running
+nice-archive test command when subagents are available. The subagent runs the
+test in a managed session and reports progress, but the main agent applies the
+output watchdog and decides whether the test is stuck. If the watchdog
+threshold is reached, the main agent instructs the subagent to interrupt or
+terminate the test, or terminates the managed session itself if the subagent
+cannot.
 
 Required reading
 
@@ -194,9 +237,11 @@ possible and make vulnerable and fixed variants differ only where required.
 
 Manual validation must happen before finalizing test.py:
 
-1. Start the vulnerable scenario or standalone VMs through the NICE Archive
-   CLI.
-2. Use the printed SSH command, popup VM, or test-driver shell.
+1. Start the vulnerable scenario through the NICE Archive CLI, preferably with
+   a scenario subagent, or use standalone VMs only when scenario mode is not a
+   good fit.
+2. Use VM-operator subagents with the printed SSH commands, popup VM, or
+   test-driver shell.
 3. Verify target health and run the trigger manually.
 4. Repeat against the fixed variant with the same trigger.
 5. Translate the observed workflow into test.py.
@@ -235,6 +280,10 @@ Run both variants through the NICE Archive CLI:
 
 nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
 nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
+
+When available, run each long-lived test in a test-runner subagent while the
+main agent monitors progress and applies the stuck-test watchdog. The main
+agent, not the subagent, decides whether to terminate a stuck test.
 
 Do not claim success unless these commands were actually run and the output
 supports the claim. Review git status afterward because CLI test and scenario

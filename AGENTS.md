@@ -102,6 +102,8 @@ This is a hard pre-execution gate:
 - Never launch an interactive or login shell merely to run automation. Do not
   wait for a shell prompt, source the user's startup files, or assume aliases
   and shell functions exist.
+- Use `expect`/`pexpect` when the workflow genuinely requires a TTY or
+  human-style prompt interaction.
 - Prefer direct tool arguments and `nix develop -c <program> <args>` over shell
   activation snippets.
 - A script with Bash syntax must have a Bash shebang and be invoked with Bash;
@@ -139,6 +141,41 @@ Apply this output watchdog to ordinary commands, VM activity, and NixOS tests:
 For an interactive scenario, a successful bounded test-driver or SSH command
 counts as a response even when the scenario terminal itself is quiet. The
 health check must finish within the same five-minute inactivity window.
+
+## Subagent Orchestration
+
+When the agent harness provides subagents, use them to help with manual
+scenario validation and long-running automated tests. Subagents are execution
+helpers, not decision makers: the main agent remains responsible for research,
+isolation choices, package pins, safety limits, stuck-test decisions,
+documentation, and final claims.
+
+Use this orchestration pattern when practical:
+
+- Start scenario mode with a dedicated scenario subagent using
+  `nice-archive scenario --case <case> --vulnerable <true|false> --popup false`.
+  The subagent must run it as a managed long-lived session, capture the printed
+  SSH commands, keep the scenario alive, and report readiness and new output
+  to the main agent. It must not run the exploit unless explicitly instructed.
+- Spawn one or more VM-operator subagents to use the printed SSH commands for
+  the relevant VMs. These subagents perform bounded guest-side health checks,
+  run the exploit or trigger inside the VM, collect guest logs and oracle
+  evidence, and report exact commands and outputs. They must use only guest
+  fixtures and must never target host `localhost` or unrelated services.
+- The main agent monitors the scenario subagent and VM-operator subagents,
+  decides which VM commands to run next, records the manual vulnerable and
+  fixed observations, and explicitly terminates the scenario when done.
+- Attempt scenario mode before falling back to standalone VMs, unless the case
+  generator does not expose interactive scenarios or repository documentation
+  shows that standalone VMs are required.
+
+For automated validation, spawn a test-runner subagent for each long-running
+`nice-archive test` command when subagents are available. The subagent runs the
+test in a managed session and reports progress, but the main agent applies the
+output watchdog and decides whether the test is stuck. If the watchdog
+threshold is reached, the main agent instructs the subagent to interrupt or
+terminate the test, or terminates the managed session itself if the subagent
+cannot.
 
 Record an end timestamp after validation so elapsed wall-clock time can be
 calculated. Never estimate token counts or billing data from context length or
@@ -342,13 +379,15 @@ Work from cheap checks to expensive VM runs:
 2. Complete source research and choose verified package pins.
 3. Implement the flake, VM modules, trigger, and initial documentation.
 4. Evaluate flake outputs and confirm package versions.
-5. Start the vulnerable scenario or standalone VMs.
-6. Use the printed SSH commands, popup VM, or test-driver shell to check target
-   health and run the trigger manually inside the lab.
+5. Start the vulnerable scenario with a scenario subagent when available, or
+   use standalone VMs only when scenario mode is unavailable or inappropriate.
+6. Use VM-operator subagents, printed SSH commands, popup VM, or test-driver
+   shell to check target health and run the trigger manually inside the lab.
 7. Repeat the manual trigger against the fixed scenario.
 8. Encode the verified workflow in `test.py`.
-9. Run the complete vulnerable automated test.
-10. Run the complete fixed automated test.
+9. Run the complete vulnerable automated test, preferably through a
+   test-runner subagent while the main agent monitors for stuck execution.
+10. Run the complete fixed automated test the same way.
 11. Update the README with verified commands and observations.
 12. Clean or ignore generated artifacts and inspect `git status --short`.
 

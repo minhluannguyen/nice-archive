@@ -266,6 +266,12 @@ operations, and record model, harness, elapsed time, token usage, and cost in
 the completed case README. Unavailable runtime metadata must be labeled rather
 than estimated, and missing per-run telemetry does not block completion.
 
+When an agent harness supports subagents, the workflow asks the main agent to
+orchestrate scenario and test helpers: a scenario subagent keeps
+`nice-archive scenario` running, VM-operator subagents SSH into the printed VM
+commands to run bounded guest-side exploit steps, and test-runner subagents run
+long automated tests while the main agent monitors for stuck execution.
+
 Shell detection and isolation are hard gates: agents must not run compound
 shell syntax before identifying the command interpreter, and must never execute
 vulnerable software or PoCs directly in the current session. `nix develop` and

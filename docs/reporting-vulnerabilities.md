@@ -47,11 +47,14 @@ If you are an LLM agent working on a new report, follow this order:
 6. Design the VM topology.
 7. Decide which NICE Archive library generator fits.
 8. Implement the Nix files.
-9. Start the VM scenario or standalone VMs and reproduce the vulnerability manually.
-10. Prefer SSH or popup VM windows for manual reproduction.
+9. Start the VM scenario with a scenario subagent when available, or use
+   standalone VMs only when scenario mode is unavailable or inappropriate.
+10. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
+    shell for manual reproduction.
 11. Translate the successful manual workflow into `test.py`.
 12. End the automated test with suitable `assertion_blocks` helpers.
-13. Run vulnerable and fixed tests with finite timeouts.
+13. Run vulnerable and fixed tests with finite timeouts, preferably through
+    test-runner subagents while the main agent monitors progress.
 14. Update the case README with verified commands, assertions, and LLM
     reproduction metadata.
 15. Report exactly what changed and what was verified.
@@ -76,6 +79,9 @@ requirements:
 - Follow existing case style before inventing a new structure. Heartbleed is a
   good model for historical user-space packages.
 - Use the scenario helper plus SSH for manual validation when possible.
+- When subagents are available, use a scenario subagent to keep scenario mode
+  running and VM-operator subagents to SSH into the generated VMs and simulate
+  the exploit from inside the lab.
 - Use standalone VMs for manual validation when the NixOS test driver is not a
   good fit.
 - Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
@@ -111,10 +117,46 @@ files, or wait for a shell prompt. A script must declare and use its intended
 interpreter. Human reproduction commands must match the recorded user shell or
 name the interpreter explicitly.
 
+Use `expect`/`pexpect` when the workflow genuinely requires a TTY or
+human-style prompt interaction.
+
 Every command tool call needs a finite deadline. Long-lived VM scenarios need
 a managed session, bounded readiness checks, and explicit termination. If a
 command unexpectedly requests input or stops progressing, terminate it at the
 deadline and diagnose the shell or invocation.
+
+### Subagent orchestration
+
+When an LLM agent has a subagent facility, use it to split long-running VM
+operations from orchestration. Subagents are execution helpers; the main agent
+still owns research, safety decisions, the watchdog, test termination
+decisions, documentation, and final claims.
+
+For manual validation, use this pattern when practical:
+
+1. Start `nice-archive scenario --case <case> --vulnerable <true|false>
+   --popup false` in a dedicated scenario subagent. The subagent should keep
+   the scenario running as a managed session, capture the printed SSH commands,
+   and report readiness plus new output.
+2. Spawn one or more VM-operator subagents to connect with the printed SSH
+   commands. They should run bounded guest-side health checks, execute the
+   trigger inside the VM, collect logs and oracle evidence, and report exact
+   commands and outputs.
+3. Keep the main agent as the orchestrator. It decides what each VM operator
+   should try next, compares vulnerable and fixed observations, tracks the
+   watchdog, and tells the scenario subagent when to terminate the VMs.
+
+Attempt scenario mode before falling back to standalone VMs unless the case
+does not expose interactive scenarios or the target is known to require
+standalone VMs. VM-operator subagents must use only guest fixtures and must
+never target host `localhost`, unrelated local services, or public systems.
+
+For automated validation, spawn a test-runner subagent for each long-running
+`nice-archive test` command when available. The subagent reports progress from
+the managed test session, but the main agent decides whether the test is stuck
+under the two-minute polling and five-minute inactivity watchdog. If the
+watchdog fires, the main agent instructs the subagent to interrupt or
+terminate the test, or terminates the managed session itself if needed.
 
 ### Isolation gate
 
@@ -734,6 +776,12 @@ nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true
 nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false
 ```
 
+For LLM agents with subagents, run each long-running test command in a
+test-runner subagent. The main agent should poll the subagent for meaningful
+new output or bounded VM/test-driver responses, decide whether the test is
+stuck, and issue the interrupt or termination instruction if the watchdog
+threshold is reached.
+
 Save a full log with a custom filename:
 
 ```bash
@@ -840,6 +888,13 @@ nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup 
 Inside the VM, run the exploit exactly as a human researcher would, check logs,
 and inspect files. When the manual flow works, translate the commands into
 `test.py`.
+
+For LLM agents with subagents, run terminal 1 in a scenario subagent and use
+VM-operator subagents for terminal 2 and any additional attacker, client, or
+server sessions. The main agent should keep the printed SSH commands, decide
+which VM each operator should enter, compare the evidence they report, and
+terminate the scenario after both vulnerable and fixed observations are
+recorded.
 
 ### Path B: run standalone VMs manually
 
