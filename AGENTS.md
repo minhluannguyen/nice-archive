@@ -116,6 +116,30 @@ unexpectedly requests input or stops producing progress, terminate it at the
 deadline, inspect why, and correct the shell or invocation. Never wait
 indefinitely for a presumed prompt or completion.
 
+Apply this output watchdog to ordinary commands, VM activity, and NixOS tests:
+
+- If a command can run for more than two minutes, start it as a managed session
+  rather than using one long blocking call.
+- Poll the session at least once every two minutes. Each poll must inspect and
+  report new output or perform a bounded VM/test-driver health check.
+- Track the time of the last meaningful log line or successful bounded
+  response. Repeated identical output and mere process existence do not count
+  as progress.
+- If there is no new meaningful output and no successful bounded response for
+  five continuous minutes, explicitly terminate the command. Do not continue
+  waiting merely because the process still exists.
+- Terminate gracefully first with the managed session's interrupt or `TERM`.
+  Wait at most 30 seconds, then force termination if necessary. Stop only the
+  process group or VM processes belonging to the current command; never use a
+  broad host-wide kill pattern.
+- After termination, collect the last output, exit status, service or VM state,
+  and relevant logs. Check for and stop any child test-driver or QEMU processes
+  left by that command before retrying.
+
+For an interactive scenario, a successful bounded test-driver or SSH command
+counts as a response even when the scenario terminal itself is quiet. The
+health check must finish within the same five-minute inactivity window.
+
 Record an end timestamp after validation so elapsed wall-clock time can be
 calculated. Never estimate token counts or billing data from context length or
 elapsed time. If the runtime does not expose a metadata value, record it as
