@@ -73,6 +73,30 @@ termination step. If a command asks for input or stops making progress,
 terminate it at the deadline and fix the invocation instead of waiting
 indefinitely.
 
+Output polling watchdog
+
+For ordinary commands, VM activity, and NixOS tests that can run longer than
+two minutes:
+
+1. Start the command as a managed session instead of one long blocking call.
+2. Poll its output at least once every two minutes.
+3. Track the most recent meaningful log line or successful bounded VM or
+   test-driver response. Repeated identical output and mere process existence
+   do not count as progress.
+4. If no meaningful output and no bounded response arrives for five continuous
+   minutes, explicitly terminate the command. Do not keep waiting because the
+   process still exists.
+5. Send an interrupt or TERM first, wait no more than 30 seconds, and then
+   force termination if required. Target only the process group and VM children
+   started for this command; never use a broad host-wide kill command.
+6. Capture the final output, exit status, VM or service state, and relevant
+   logs. Check for leftover test-driver or QEMU children before retrying.
+
+For an interactive scenario, a bounded SSH or test-driver command that returns
+successfully counts as a response even if the scenario terminal has no new
+output. That health check must complete within the five-minute inactivity
+window.
+
 Required reading
 
 Read at least:
@@ -183,6 +207,10 @@ Give every network request, polling loop, VM wait, and potentially blocking
 trigger an explicit finite timeout. Fixed-variant checks must not wait forever.
 Use bounded guest commands such as timeout, explicit test-driver deadlines, and
 attempt or elapsed-time limits for custom loops.
+
+The two-minute polling and five-minute inactivity watchdog above applies during
+these operations. A larger overall build or test deadline does not override the
+five-minute no-output/no-response limit.
 
 Give host-side builds and tests a finite but realistic deadline that accounts
 for first-time Nix downloads and compilation. When a timeout occurs, collect
