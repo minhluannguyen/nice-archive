@@ -3,10 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs-opencode.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     nix-versions.url = "github:denful/nix-versions";
   };
 
-  outputs = { self, nixpkgs, nix-versions }:
+  outputs = { self, nixpkgs, nixpkgs-opencode, nix-versions }:
     let
       systems = [
         "x86_64-linux"
@@ -18,7 +19,12 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
       forEachSystem = f: forAllSystems (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+          };
+          opencodePkgs = import nixpkgs-opencode {
+            inherit system;
+          };
 
           pythonEnv = pkgs.python312.withPackages (ps: with ps; [
             jinja2
@@ -37,6 +43,14 @@
 
           runtimePath = pkgs.lib.makeBinPath runtimePackages;
 
+          cveOrchestratorRuntimePackages = runtimePackages ++ (with pkgs; [
+            git
+          ]) ++ [
+            opencodePkgs.opencode
+          ];
+
+          cveOrchestratorRuntimePath = pkgs.lib.makeBinPath cveOrchestratorRuntimePackages;
+
           nixVersions = nix-versions.packages.${system}.default;
 
           nice-archive = pkgs.writeShellScriptBin "nice-archive" ''
@@ -44,14 +58,24 @@
 
             exec ${pythonEnv}/bin/python ${self}/nice-archive.py "$@"
           '';
+
+          cve-orchestrator = pkgs.writeShellScriptBin "cve-orchestrator" ''
+            export PATH=${cveOrchestratorRuntimePath}:$PATH
+
+            if [ -f "$PWD/cve-orchestrator.py" ]; then
+              exec ${pkgs.python312}/bin/python "$PWD/cve-orchestrator.py" "$@"
+            fi
+
+            exec ${pkgs.python312}/bin/python ${self}/cve-orchestrator.py "$@"
+          '';
         in
         f {
-          inherit pkgs pythonEnv runtimePackages nixVersions nice-archive;
+          inherit pkgs opencodePkgs pythonEnv runtimePackages nixVersions nice-archive cve-orchestrator;
         });
     in
     {
-      packages = forEachSystem ({ nice-archive, ... }: {
-        inherit nice-archive;
+      packages = forEachSystem ({ nice-archive, cve-orchestrator, ... }: {
+        inherit nice-archive cve-orchestrator;
         default = nice-archive;
       });
 
@@ -60,16 +84,23 @@
           type = "app";
           program = "${self.packages.${system}.nice-archive}/bin/nice-archive";
         };
+        cve-orchestrator = {
+          type = "app";
+          program = "${self.packages.${system}.cve-orchestrator}/bin/cve-orchestrator";
+        };
         default = self.apps.${system}.nice-archive;
       });
 
-      devShells = forEachSystem ({ pkgs, pythonEnv, runtimePackages, nixVersions, ... }: {
+      devShells = forEachSystem ({ pkgs, opencodePkgs, pythonEnv, runtimePackages, nixVersions, cve-orchestrator, ... }: {
         default = pkgs.mkShell {
           packages = [
             pythonEnv
-            pkgs.git
             nixVersions
-          ] ++ runtimePackages;
+            cve-orchestrator
+          ] ++ runtimePackages ++ [
+            pkgs.git
+            opencodePkgs.opencode
+          ];
 
           shellHook = ''
             export NICE_ARCHIVE_ROOT="$PWD"

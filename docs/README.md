@@ -18,6 +18,10 @@ Archive as a reproducible vulnerability-reporting framework.
   Use this copyable prompt when an agent does not automatically load the
   repository-level `AGENTS.md` instructions.
 
+- [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md)
+  Use this when running unattended multi-CVE OpenCode experiments and collecting
+  batch-level result metadata.
+
 ## Suggested reading order
 
 1. Read the root [README](../README.md) for setup and CLI basics.
@@ -35,3 +39,4 @@ Archive as a reproducible vulnerability-reporting framework.
 | [Library reference](./nice-archive-libs.md) | Contributors and agents editing library-backed cases | `testsGenerator`, `standaloneVMGenerator`, `oldKernelTestsGenerator`, VM fields, assertions. |
 | [Vulnerability reporting guide](./reporting-vulnerabilities.md) | Humans and LLM agents building CVE reports | End-to-end technical workflow and checklists. |
 | [LLM CVE reproduction prompt](./LLM-reproduction-prompt.md) | Users delegating CVE cases | Reusable full prompt and supplied-PoC extension. |
+| [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md) | Experiment runners | Batch OpenCode worktree orchestration, result files, live output, and OpenRouter metadata. |
