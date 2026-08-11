@@ -3,6 +3,7 @@ result
 .direnv/
 
 .venv/
+.env
 __pycache__/
 scapy
 
@@ -11,3 +12,5 @@ target
 .nixos-test-history
 
 *.log
+
+cves/llm-experiment-results*/
