@@ -33,6 +33,12 @@ proves both vulnerable and fixed behavior.
   or unrelated CVE cases.
 - Run `git status --short` before editing and again before reporting. Preserve
   all user changes, including changes in files relevant to the task.
+- Create or use a dedicated Git branch for each CVE before implementation, for
+  example `cve/CVE-YYYY-NNNN-short-name`, unless the user explicitly asks to
+  stay on the current branch. If the branch already exists, inspect it before
+  adding work. Do not switch away from uncommitted user changes without
+  preserving them or asking how to proceed. Do not mix unrelated CVE cases on
+  one branch.
 - Do not use destructive Git commands. Do not remove files unless their
   ownership and purpose are clear.
 - Treat fetched PoCs and historical software as untrusted. Inspect them before
@@ -335,13 +341,19 @@ Keep final exploit code under the case's `exploit/` directory. Record:
 - every meaningful local change and why it was required;
 - safety limits added for automation.
 
-Exploit code should perform the trigger. Variant-specific expectations belong
-in `test.py`.
+Exploit workflows should be human-readable. When the steps are small, prefer
+small single-purpose helpers under `exploit/`, or simple commands directly in
+`test.py`, over one large script that hides the whole process. A larger script
+is acceptable for genuinely complex work such as authentication flows,
+request/response handling, input processing, or protocol setup. Variant-specific
+expectations and pass/fail decisions belong in `test.py`, not in exploit code.
 
 The oracle must independently prove the security property. Strong examples
 include:
 
 - known guest-only content disclosed across a path boundary;
+- a target-unique flag, credential, token, or user record recovered by the
+  attacker and absent from helper machines;
 - a marker file created with otherwise unavailable privileges;
 - a controlled privilege-boundary crossing verified by UID and GID;
 - an expected crash, signal, or core dump;
@@ -361,6 +373,25 @@ The vulnerable branch must prove the documented effect. The fixed branch must
 apply the same trigger, prove the effect is absent, and verify that the target
 remained healthy enough for the comparison to be meaningful.
 
+Cross-check oracle evidence at the security boundary. If the attacker exploits
+a server with RCE, verify the unauthorized effect on the server, such as a file,
+process, user, log entry, or privilege change created on the server. If the
+attacker steals data from the server, verify attacker-controlled output against
+the original target-only value planted on the server. Do not rely solely on
+attacker-side output when the security effect occurs on another VM.
+
+Prefer target-unique markers over normal machine behavior. Plant deterministic,
+guest-only evidence that exists only because the lab configured the vulnerable
+target, such as a flag file, a special admin account, a flag-style password, a
+database row, an API token, an email, or a service-only credential. For
+credential disclosure, verify not only that the bytes were leaked but also, when
+practical, that the attacker can use the leaked username/password or token to
+access the protected guest resource. For file disclosure, do not merely check
+for generic `/etc/passwd` content such as `root:`; add a target-specific user,
+GECOS marker, or adjacent secret file and assert that unique marker appears in
+the attacker-controlled output. The fixed branch must assert the same marker is
+absent while the service remains healthy.
+
 Use `assertion_blocks` for the final security oracle in each branch whenever a
 suitable helper exists. Raw Python assertions may support control flow and
 health checks but must not replace an applicable assertion block. If no helper
@@ -375,9 +406,11 @@ host secrets.
 Work from cheap checks to expensive VM runs:
 
 1. Inspect repository state, documentation, similar cases, and any existing
-   target case.
+   target case, then create or switch to the dedicated CVE branch before
+   implementation.
 2. Complete source research and choose verified package pins.
-3. Implement the flake, VM modules, trigger, and initial documentation.
+3. Design target-unique oracle markers and implement the flake, VM modules,
+   trigger, and initial documentation.
 4. Evaluate flake outputs and confirm package versions.
 5. Start the vulnerable scenario with a scenario subagent when available, or
    use standalone VMs only when scenario mode is unavailable or inappropriate.
@@ -437,6 +470,7 @@ Keep the case `readme.md` self-contained and source-backed. It must cover:
 - generator and package selection strategy;
 - advisory, patch, release, PoC, distribution, and nixpkgs references;
 - exploit provenance, modifications, and safety limits;
+- target-unique markers, credentials, users, or secrets used by the oracle;
 - exact manual reproduction commands and observed behavior;
 - vulnerable and fixed CLI test commands;
 - the `test.py` oracle and what each assertion proves;
@@ -478,9 +512,13 @@ The task is complete only when all applicable items are true:
 - manual fixed behavior was observed using the same trigger;
 - vulnerable and fixed automated tests both ran and passed;
 - `test.py` checks the security effect with applicable assertion blocks;
+- the oracle relies on target-unique guest markers rather than only generic
+  machine behavior;
 - the README records accurate provenance, commands, results, and references;
 - the README records LLM reproduction metadata with unavailable values clearly
   identified;
+- the CVE work is isolated on its own Git branch unless the user explicitly
+  requested otherwise;
 - no unrelated files or generated VM artifacts are included in the change.
 
 If blocked, leave the most useful coherent partial implementation possible.

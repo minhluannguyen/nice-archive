@@ -46,6 +46,11 @@ Before exploring the repository:
    cost metrics are available. Do not guess unavailable metadata.
 6. Search for an existing case with the same CVE ID. Complete it in place when
    it represents the same vulnerability.
+7. Create or switch to a dedicated Git branch for this CVE before
+   implementation, for example `cve/CVE-YYYY-NNNN-short-name`, unless the user
+   explicitly asks to stay on the current branch. Do not switch away from
+   uncommitted user changes without preserving them or asking how to proceed.
+   Do not mix unrelated CVE cases on one branch.
 
 Shell execution gate
 
@@ -189,9 +194,12 @@ the CVE description, upstream advisory, fixing patch, or regression test. Cite
 the authoritative basis for every trigger step. Do not invent an independent
 exploit technique or write an unrelated PoC from scratch.
 
-Keep final trigger code under the case's exploit/ directory. The trigger should
-exercise the vulnerability; vulnerable and fixed expectations belong in
-test.py.
+Keep final trigger code under the case's exploit/ directory. When exploit
+steps are small, prefer small single-purpose helpers, or simple commands
+directly in test.py, over one large script that hides the process. A larger
+script is fine for complex work such as authentication flows, request/response
+handling, input processing, or protocol setup. Vulnerable and fixed
+expectations and pass/fail decisions belong in test.py.
 
 Isolation gate
 
@@ -234,6 +242,9 @@ requires it.
 
 Choose the smallest faithful VM topology. Keep helper VMs invariant when
 possible and make vulnerable and fixed variants differ only where required.
+Design target-unique oracle markers before finalizing the VM fixtures, such as
+a flag file, special user, flag-style password, API token, email, database row,
+or service-only credential that exists only on the protected target.
 
 Manual validation must happen before finalizing test.py:
 
@@ -270,6 +281,25 @@ vulnerable branch must demonstrate the effect. The fixed branch must apply the
 same trigger, prove the effect is absent, and verify the target remained
 healthy.
 
+Cross-check oracle evidence at the security boundary. If the attacker exploits
+a server with RCE, verify the unauthorized effect on the server. If the
+attacker steals data from the server, compare attacker output with the original
+target-only value planted on the server. Do not rely only on attacker-side
+output when the effect occurs on another VM.
+
+Prefer target-unique markers over normal machine behavior. Plant deterministic,
+guest-only evidence that exists only because the lab configured the target,
+such as a flag file, a special admin account, a flag-style password, a database
+row, an API token, an email, or a service-only credential. For credential
+disclosure, verify not only that the bytes were leaked but also, when
+practical, that the attacker can use the leaked username/password or token to
+access the protected guest resource.
+
+For file disclosure, do not merely check for generic /etc/passwd content such
+as root:. Add a target-specific user, GECOS marker, or adjacent secret file and
+assert that the unique marker appears in attacker-controlled output. The fixed
+branch must assert the same marker is absent while the service remains healthy.
+
 End each test branch with a suitable assertion_blocks helper whenever one
 applies. If none applies, use a deterministic direct assertion and explain why
 in the case README.
@@ -292,8 +322,8 @@ commands may stage case files.
 Case README
 
 Document the CVE facts, sources, topology, generator, package pins, PoC
-provenance, changes, safety limits, exact manual commands, automated commands,
-oracle, observed results, and limitations.
+provenance, changes, safety limits, target-unique markers, exact manual
+commands, automated commands, oracle, observed results, and limitations.
 
 After validation, add a Reproduction metadata section stating that the CVE was
 reproduced by an LLM agent. Include:
