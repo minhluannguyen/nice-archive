@@ -40,24 +40,27 @@ If you are an LLM agent working on a new report, follow this order:
 
 1. Record the user shell and command-runner shell separately, plus UTC start
    time, model, harness, and which usage metadata the runtime exposes.
-2. Do read-only discovery first.
-3. Identify vulnerable and fixed versions.
-4. Record exploit provenance before copying or adapting exploit code.
-5. Search nixpkgs history before building vulnerable software from source.
-6. Design the VM topology.
-7. Decide which NICE Archive library generator fits.
-8. Implement the Nix files.
-9. Start the VM scenario with a scenario subagent when available, or use
+2. Do read-only discovery first and search for an existing matching case.
+3. Create or switch to a dedicated Git branch for this CVE before
+   implementation, unless the user explicitly asks to stay on the current
+   branch.
+4. Identify vulnerable and fixed versions.
+5. Record exploit provenance before copying or adapting exploit code.
+6. Search nixpkgs history before building vulnerable software from source.
+7. Design the VM topology and target-unique oracle markers.
+8. Decide which NICE Archive library generator fits.
+9. Implement the Nix files.
+10. Start the VM scenario with a scenario subagent when available, or use
    standalone VMs only when scenario mode is unavailable or inappropriate.
-10. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
+11. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
     shell for manual reproduction.
-11. Translate the successful manual workflow into `test.py`.
-12. End the automated test with suitable `assertion_blocks` helpers.
-13. Run vulnerable and fixed tests with finite timeouts, preferably through
+12. Translate the successful manual workflow into `test.py`.
+13. End the automated test with suitable `assertion_blocks` helpers.
+14. Run vulnerable and fixed tests with finite timeouts, preferably through
     test-runner subagents while the main agent monitors progress.
-14. Update the case README with verified commands, assertions, and LLM
+15. Update the case README with verified commands, assertions, and LLM
     reproduction metadata.
-15. Report exactly what changed and what was verified.
+16. Report exactly what changed and what was verified.
 
 ## LLM reproduction contract
 
@@ -68,6 +71,8 @@ requirements:
   building vulnerable software from source.
 - Use `nix-versions` or Nixpkgs history before deciding that a source build is
   necessary.
+- Create one dedicated Git branch per CVE case before implementation, and do
+  not combine unrelated CVE work on one branch.
 - Treat shell detection as a pre-execution gate. Do not run shell-dependent or
   compound commands until the command runner's interpreter is known.
 - Give every command-execution call a finite deadline and never wait
@@ -89,6 +94,9 @@ requirements:
   minimal trigger from authoritative CVE material instead of inventing an
   independent exploit from scratch.
 - Convert the manual workflow into `test.py`.
+- Plant target-unique flags, credentials, users, tokens, or records for the
+  oracle. Do not rely only on generic machine content such as normal
+  `/etc/passwd` entries.
 - End `test.py` with framework assertion blocks whenever one fits.
 - Bound VM waits, network operations, exploit processes, and fixed-variant
   checks with finite timeouts.
@@ -182,6 +190,25 @@ lab cannot start, report the blocker instead of falling back to the host.
 
 ## 1. Create a case directory
 
+Before implementation, put each CVE on its own branch so multiple
+reproductions can proceed without staging or generated-artifact conflicts:
+
+```bash
+git switch -c cve/CVE-YYYY-NNNN-short-name
+```
+
+If the branch already exists, inspect it before adding work:
+
+```bash
+git switch cve/CVE-YYYY-NNNN-short-name
+git status --short
+```
+
+Do not switch branches with unrelated uncommitted user changes in the worktree.
+Preserve or ask about those changes first. For truly parallel local execution,
+use separate branches in separate worktrees or clones so each VM/test run owns
+its generated artifacts.
+
 Use the directory shape:
 
 ```bash
@@ -225,6 +252,39 @@ For each report, decide what the automated test should prove:
 - vulnerable case: the exploit succeeds;
 - fixed case: the exploit fails or the vulnerable effect is absent.
 
+### Unique markers and lab credentials
+
+Design the oracle around evidence that is unique to this target VM and this
+CVE case. Generic operating-system output is usually too weak: `root:` in
+`/etc/passwd`, a default login shell, a common service banner, or a normal HTTP
+status code may appear on every machine in the topology and does not prove that
+the attacker crossed the intended boundary.
+
+Good marker patterns include:
+
+- a flag file with a case-specific value, such as
+  `NICE-CVE-YYYY-NNNN-SERVER-FLAG`;
+- a special target-only user with a flag-style GECOS field, password, or home
+  directory marker;
+- an admin account whose username and password are unique to the case and can
+  later be used by the attacker to prove credential disclosure;
+- a database row, API token, email, session cookie, or service-side secret that
+  exists only on the protected target; and
+- a root-owned marker file or account created only when a privilege boundary is
+  crossed.
+
+For path traversal or file disclosure, prefer reading a target-specific secret
+file when the vulnerability allows it. If the public PoC naturally reads
+`/etc/passwd`, add a unique target-only user or GECOS marker and assert on that
+marker instead of only checking for `root:`. For credential disclosure, verify
+the leaked credential by using it to access a protected guest resource when the
+application flow allows that extra check.
+
+Keep these markers deterministic and guest-only. They are test fixtures, not
+real secrets. Document where each marker is planted, why it proves the security
+property, and how the fixed branch proves the marker is absent while the target
+stays healthy.
+
 ### Exploit provenance
 
 Before integrating exploit code, record where it came from and how it was
@@ -253,6 +313,17 @@ modules reference the final recipe-local path, such as
 `./exploit/trigger.py`.
 
 The exploit source code should only handle practical or realistic inputs. Branching for tests should be avoided; test logic belongs in `test.py` instead. For example, if the exploit is expected to crash or fail on a fixed version, the exploit should not catch the crash and print "failed" or "success"; that must be handled by the test script.
+
+Keep exploit workflows easy to inspect. When the exploit steps are small enough
+to resemble what a human would run manually, prefer small single-purpose
+helpers under `exploit/`, or simple commands directly in `test.py`, over one
+large "do everything" script. Use a larger script when the task is genuinely
+heavy, such as authentication request/response flows, input processing,
+protocol setup, or other complex mechanics.
+
+The README manual reproduction should mirror the same human-readable sequence.
+`test.py` should orchestrate the sequence and own vulnerable/fixed expectations
+and pass/fail decisions.
 
 ### Package source strategy
 
@@ -641,6 +712,13 @@ framework's assertion blocks for that oracle:
 
 - use raw `assert` only for control flow, variant checks, or values that do not
   fit an assertion helper;
+- assert target-unique marker evidence, not generic machine behavior. For
+  example, a path traversal that reads `/etc/passwd` should check for a
+  case-specific target user or marker line instead of only `root:`;
+- cross-check evidence at the boundary where the security effect occurs. For
+  RCE against a server, check the unauthorized file, process, user, log, or
+  privilege change on the server. For data theft from a server, compare the
+  attacker's output with the original target-only value planted on the server;
 - finish vulnerable and fixed branches with `assertion_blocks` helpers when a
   helper fits; and
 - model new tests on existing cases such as Heartbleed, curl-ws-loop, zgrep
@@ -1056,7 +1134,10 @@ Show the `nice-archive test` commands for vulnerable and fixed variants.
 ## Automated oracle
 
 The machine-checkable reproduction is implemented in `test.py`. Summarize the
-assertion blocks used there and what security property each one proves.
+assertion blocks used there, the target-unique markers they check, and what
+security property each one proves. For multi-VM cases, explain which evidence
+is checked on the target and which attacker output is compared against the
+target's original marker.
 
 ## Interactive debugging
 
@@ -1116,6 +1197,14 @@ make the section look complete.
 - Do not finish `test.py` with only raw Python `assert` statements when an
   assertion block fits.
 - Do not check only that an exploit command exits; check the security effect.
+- Do not assert only generic OS or service behavior. Plant and check a
+  target-unique flag, credential, user, token, or record.
+- Do not hide simple exploit workflows inside one large script when small
+  helpers or `test.py` commands would make the manual sequence clearer.
+- Do not put vulnerable/fixed expectations or the final oracle inside exploit
+  scripts.
+- Do not rely only on attacker-side output for effects that should be visible
+  on the target VM.
 - Do not omit exploit provenance.
 - Do not leave the case README without human manual reproduction commands.
 - Do not bury the automated oracle; point readers to `test.py`.
@@ -1131,6 +1220,13 @@ Before considering the report done:
 - [ ] The vulnerable test demonstrates the exploit or vulnerable behavior.
 - [ ] The fixed test demonstrates mitigation or absence of the vulnerable effect.
 - [ ] The assertion checks the security property, not just command completion.
+- [ ] The oracle uses target-unique guest markers rather than only generic
+      machine behavior.
+- [ ] Multi-VM oracles cross-check attacker output against the original
+      target-side marker or check the unauthorized effect on the target VM.
+- [ ] Simple exploit workflows are split into clear helper commands or
+      `test.py` steps; complex scripts are used only where they make the
+      exploit mechanics clearer.
 - [ ] `test.py` ends with framework assertion blocks where helpers fit.
 - [ ] nixpkgs history was checked before building vulnerable software from source.
 - [ ] Existing nixpkgs packages are used when suitable versions exist.
@@ -1145,6 +1241,8 @@ Before considering the report done:
 - [ ] Any old-kernel test uses `oldKernelTestsGenerator` unless it needs custom low-level behavior.
 - [ ] The case README explains the topology, exploit, assertions, and commands.
 - [ ] The case README points to `test.py` as the automated oracle.
+- [ ] Each CVE is isolated on its own Git branch or worktree when multiple CVEs
+      are in flight.
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,
