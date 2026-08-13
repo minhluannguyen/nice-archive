@@ -1,9 +1,9 @@
 # CVE OpenCode batch orchestrator
 
-`cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated Git
-worktree for each CVE. It supports parallel workers, retries, hard attempt
-timeouts, resume, live interaction output, and optional OpenRouter metadata
-enrichment.
+`cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
+detached Git worktree directory for each CVE. It supports parallel workers,
+retries, hard attempt timeouts, resume, live interaction output, and optional
+OpenRouter metadata enrichment.
 
 ## What it records
 
@@ -96,6 +96,8 @@ workflow.
 ## 4. Results
 
 Default result artifacts are written under `cves/llm-experiment-results/`.
+Per-CVE worktrees are detached at `--base-ref`, so the orchestrator does not
+create experiment branches.
 
 ```text
 nice-archive/
@@ -125,13 +127,17 @@ nice-archive/
 ```text
 cve,status,attempts,wall_time_seconds,opencode_input_tokens,
 opencode_output_tokens,opencode_total_tokens,opencode_tool_calls,
-opencode_cost,openrouter_reasoning_tokens,openrouter_cost,...
+opencode_cost,openrouter_reasoning_tokens,openrouter_cost,worktree_ref,...
 ```
 
 ## 5. Success/failure contract
 
 The prompt instructs the agent to create `EXPERIMENT_RESULT.json` in its
 worktree root before it finishes:
+
+The built-in prompt also tells the agent to stay in the assigned detached
+worktree directory and not create, switch, or require a separate Git branch for
+the experiment.
 
 ```json
 {
