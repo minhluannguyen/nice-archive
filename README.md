@@ -272,6 +272,16 @@ Generated case READMEs follow a compact required section order and describe
 their own evidence directly. They do not compare themselves with or cite other
 CVE example cases.
 
+Case topologies use the minimum realistic set of VMs. Required deployment
+boundaries remain separate, such as a proxy VM in front of a backend VM, while
+machines without an independent security role are omitted.
+
+Agent-run commands use hard limits: 5 minutes for ordinary commands and VM
+readiness, 30 minutes for a complete NixOS test, and 45 minutes for an
+interactive scenario. Managed sessions are polled every two minutes and stop
+after five minutes without meaningful progress. Agents use the NICE Archive
+CLI whenever it supports the required operation.
+
 When an agent harness supports subagents, the workflow asks the main agent to
 orchestrate scenario and test helpers: a scenario subagent keeps
 `nice-archive scenario` running, VM-operator subagents SSH into the printed VM

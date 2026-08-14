@@ -76,6 +76,19 @@ termination step. If a command asks for input or stops making progress,
 terminate it at the deadline and fix the invocation instead of waiting
 indefinitely.
 
+Enforce these hard wall-clock limits from process launch:
+
+- Ordinary command: 5 minutes.
+- VM or service readiness: 5 minutes.
+- Complete NixOS test, including build and execution: 30 minutes.
+- Complete interactive scenario, including startup, validation, and cleanup:
+  45 minutes.
+
+Apply each limit both through the command tool and through a process-level
+watchdog when available. Do not extend a running deadline or restart merely to
+reset it. Exit status 124, forced termination, or expiration of any limit is a
+failure or blocker, not evidence that the fixed variant is secure.
+
 Output polling watchdog
 
 For ordinary commands, VM activity, and NixOS tests that can run longer than
@@ -95,6 +108,10 @@ two minutes:
 6. Capture the final output, exit status, VM or service state, and relevant
    logs. Check for leftover test-driver or QEMU children before retrying.
 
+The inactivity timer is independent of the two-minute polling interval. Poll
+at or before two and four minutes, then enforce the cutoff at five minutes; do
+not wait for a six-minute poll.
+
 For an interactive scenario, a bounded SSH or test-driver command that returns
 successfully counts as a response even if the scenario terminal has no new
 output. That health check must complete within the five-minute inactivity
@@ -108,16 +125,23 @@ not decision makers. The main agent remains responsible for research,
 isolation choices, package pins, safety limits, stuck-test decisions,
 documentation, and final claims.
 
+Subagent availability is not enough. A subagent may own a scenario or test only
+if it immediately returns a detached session handle that the main agent can
+poll and terminate independently. If the call is synchronous, non-cancellable,
+or hides the process handle, the main agent must own the managed command and
+use subagents only for bounded finite tasks. Never block the main agent waiting
+for a subagent whose scenario is waiting for manual termination.
+
 Use this pattern when practical:
 
 1. Start scenario mode with a dedicated scenario subagent:
 
-   nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+   timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
 
    The scenario subagent must run the command as a managed long-lived session,
    capture the printed SSH commands, keep the scenario alive, and report
    readiness and new output. It must not run the exploit unless explicitly
-   instructed.
+   instructed. Launch it with the 45-minute process-level deadline.
 2. Spawn one or more VM-operator subagents to SSH into the printed VM commands.
    They should perform bounded guest-side health checks, run the exploit or
    trigger inside the VM, collect logs and oracle evidence, and report exact
@@ -133,12 +157,13 @@ generator does not expose interactive scenarios or repository documentation
 shows that standalone VMs are required.
 
 For automated validation, spawn a test-runner subagent for each long-running
-nice-archive test command when subagents are available. The subagent runs the
-test in a managed session and reports progress, but the main agent applies the
-output watchdog and decides whether the test is stuck. If the watchdog
-threshold is reached, the main agent instructs the subagent to interrupt or
-terminate the test, or terminates the managed session itself if the subagent
-cannot.
+nice-archive test command only when the capability gate above passes. The
+subagent runs the test in a managed session and reports progress, but the main
+agent applies the output watchdog and decides whether the test is stuck. If the
+watchdog threshold is reached, the main agent instructs the subagent to
+interrupt or terminate the test, or terminates the managed session itself.
+Otherwise, the main agent owns the managed test command. Launch each test with
+the 30-minute process-level deadline.
 
 Required reading
 
@@ -235,8 +260,28 @@ nix-versions over source builds. Usually use nice-archive-lib.testsGenerator;
 use another generator only when the documentation or target environment
 requires it.
 
-Choose the smallest faithful VM topology. Keep helper VMs invariant when
-possible and make vulnerable and fixed variants differ only where required.
+Use the NICE Archive CLI whenever it supports the operation. Use it for case
+discovery, flake updates, scenarios, standalone VMs, and vulnerable/fixed
+tests. Outside the development shell, use nix run . -- followed by the same
+NICE Archive command arguments. Use direct nix build, nix run, or nix eval only
+when the CLI has no suitable operation or when diagnosing a CLI/generated
+output failure. Record why direct Nix was necessary and perform final
+vulnerable/fixed validation through nice-archive test.
+
+Choose a minimum realistic VM topology. Preserve every service, network,
+privilege, and trust boundary required by the vulnerability without adding
+unnecessary machines. When an intermediary has a distinct deployment role,
+give it a separate VM. For example, a required reverse proxy, gateway, or load
+balancer must run on a proxy VM separate from the backend server. Apply the
+same rule to required mail relays, databases, identity providers, DNS servers,
+file servers, and other protocol intermediaries.
+
+Co-locate services only when that reflects a normal deployment and separation
+cannot affect the vulnerable behavior. Every VM must have a stated role, and
+removing it should either break a documented precondition or weaken isolation.
+Document each VM and the security-relevant communication path. Keep helper VMs
+invariant when possible and make vulnerable and fixed variants differ only
+where required.
 Design target-unique oracle markers before finalizing the VM fixtures, such as
 a flag file, special user, flag-style password, API token, email, database row,
 or service-only credential that exists only on the protected target.
@@ -260,13 +305,10 @@ Use bounded guest commands such as timeout, explicit test-driver deadlines, and
 attempt or elapsed-time limits for custom loops.
 
 The two-minute polling and five-minute inactivity watchdog above applies during
-these operations. A larger overall build or test deadline does not override the
-five-minute no-output/no-response limit.
-
-Give host-side builds and tests a finite but realistic deadline that accounts
-for first-time Nix downloads and compilation. When a timeout occurs, collect
-diagnostics and report it as a failure or blocker. A timeout alone is not proof
-that the fixed variant is secure.
+these operations. A larger hard limit does not override the five-minute
+no-output/no-response cutoff. The 30-minute NixOS test limit still applies to
+first-time Nix downloads and compilation. If it is insufficient, collect
+diagnostics and report a blocker rather than silently extending it.
 
 Test oracle
 
@@ -303,8 +345,8 @@ Validation
 
 Run both variants through the NICE Archive CLI:
 
-nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
-nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
+timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
+timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
 
 When available, run each long-lived test in a test-runner subagent while the
 main agent monitors progress and applies the stuck-test watchdog. The main
@@ -340,9 +382,9 @@ add separate Description, Overview, Assertions, or Interactive debugging
 sections, duplicate commands, lengthy history, or implementation walkthroughs.
 
 The README must still identify affected/fixed versions, prerequisites, impact,
-generator, topology, package pins, trigger, target-unique marker, oracle,
-vulnerable/fixed results, PoC modifications, safety limits, limitations, and
-external references.
+generator, each VM and service role, communication path, package pins, trigger,
+target-unique marker, oracle, vulnerable/fixed results, PoC modifications,
+safety limits, limitations, and external references.
 
 After validation, add a Reproduction metadata section stating that the CVE was
 reproduced by an LLM agent. Include:
