@@ -118,6 +118,21 @@ unexpectedly requests input or stops producing progress, terminate it at the
 deadline, inspect why, and correct the shell or invocation. Never wait
 indefinitely for a presumed prompt or completion.
 
+Enforce these hard wall-clock limits from process launch:
+
+| Activity | Maximum runtime |
+| --- | --- |
+| Ordinary command | 5 minutes |
+| VM or service readiness | 5 minutes |
+| Complete NixOS test, including build and execution | 30 minutes |
+| Complete interactive scenario, including startup, validation, and cleanup | 45 minutes |
+
+Apply the limit at launch with both the execution tool's deadline and a
+process-level watchdog where available. A larger tool timeout must not weaken
+the process-level limit. Do not extend a deadline while the command is running
+or restart merely to reset the clock. Timeout exit statuses such as `124` or a
+forced kill are failures or blockers, never evidence of fixed behavior.
+
 Apply this output watchdog to ordinary commands, VM activity, and NixOS tests:
 
 - If a command can run for more than two minutes, start it as a managed session
@@ -130,6 +145,9 @@ Apply this output watchdog to ordinary commands, VM activity, and NixOS tests:
 - If there is no new meaningful output and no successful bounded response for
   five continuous minutes, explicitly terminate the command. Do not continue
   waiting merely because the process still exists.
+- Enforce the five-minute inactivity cutoff independently of the two-minute
+  polling interval. Poll at or before two and four minutes, then perform the
+  cutoff check at five minutes rather than waiting for a six-minute poll.
 - Terminate gracefully first with the managed session's interrupt or `TERM`.
   Wait at most 30 seconds, then force termination if necessary. Stop only the
   process group or VM processes belonging to the current command; never use a
@@ -150,6 +168,15 @@ helpers, not decision makers: the main agent remains responsible for research,
 isolation choices, package pins, safety limits, stuck-test decisions,
 documentation, and final claims.
 
+Subagent availability alone is insufficient. Delegate ownership of a scenario
+or test only when the harness returns a detached session handle immediately and
+the main agent can poll output and terminate that exact session independently.
+If the subagent call is synchronous, non-cancellable, or hides the process
+handle, the main agent must start and own the managed command. In that mode,
+subagents may perform only bounded finite work such as research, log analysis,
+or individual SSH commands. Never block the main agent waiting for a subagent
+that is itself waiting for an interactive scenario to exit.
+
 Use this orchestration pattern when practical:
 
 - Start scenario mode with a dedicated scenario subagent using
@@ -157,6 +184,7 @@ Use this orchestration pattern when practical:
   The subagent must run it as a managed long-lived session, capture the printed
   SSH commands, keep the scenario alive, and report readiness and new output
   to the main agent. It must not run the exploit unless explicitly instructed.
+  Apply the 45-minute process-level deadline when the scenario is launched.
 - Spawn one or more VM-operator subagents to use the printed SSH commands for
   the relevant VMs. These subagents perform bounded guest-side health checks,
   run the exploit or trigger inside the VM, collect guest logs and oracle
@@ -170,12 +198,16 @@ Use this orchestration pattern when practical:
   shows that standalone VMs are required.
 
 For automated validation, spawn a test-runner subagent for each long-running
-`nice-archive test` command when subagents are available. The subagent runs the
-test in a managed session and reports progress, but the main agent applies the
-output watchdog and decides whether the test is stuck. If the watchdog
-threshold is reached, the main agent instructs the subagent to interrupt or
-terminate the test, or terminates the managed session itself if the subagent
-cannot.
+`nice-archive test` command only when the subagent capability gate passes. The
+subagent runs the test in a managed session and reports progress, but the main
+agent applies the output watchdog and decides whether the test is stuck. If the
+watchdog threshold is reached, the main agent instructs the subagent to
+interrupt or terminate the test, or terminates the managed session itself if
+the subagent cannot.
+
+This delegation is allowed only when the capability gate above passes. Apply
+the 30-minute process-level deadline when each test starts; the main agent must
+remain able to terminate it without waiting for the subagent to return.
 
 Record an end timestamp after validation so elapsed wall-clock time can be
 calculated. Never estimate token counts or billing data from context length or
@@ -312,6 +344,27 @@ single target VM, client/server, attacker/server, or a multi-service network.
 Use the smallest topology that faithfully models the real preconditions and
 keeps the trigger isolated.
 
+Use a minimum realistic topology:
+
+- Preserve every service, network, privilege, and trust boundary that the
+  vulnerability depends on.
+- Give an intermediary service its own VM when it represents a distinct
+  deployment role. For example, place a reverse proxy, gateway, or load
+  balancer on a separate proxy VM from the backend server rather than running
+  both on the server VM.
+- Apply the same rule to required mail relays, databases, identity providers,
+  DNS servers, file servers, and other protocol intermediaries when traffic or
+  trust crosses that boundary.
+- Do not add a VM for a helper process that has no independent role in the
+  vulnerability. Co-locate services only when that reflects a normal
+  deployment and separation cannot affect the security behavior.
+- Keep the topology practical: each VM must have a stated role, and removing
+  any VM should either break a documented precondition or weaken isolation.
+- Keep invariant infrastructure identical between vulnerable and fixed runs.
+
+Document each VM, its service role, and the security-relevant communication
+path. Explain any intentional co-location of distinct services.
+
 Make VM roles explicit. Use `variant = "package"` when only the selected
 package changes, `variant = "system"` when the machine's nixpkgs pin must
 change, and `variant = "invariant"` for machines shared by both scenarios.
@@ -405,14 +458,15 @@ Work from cheap checks to expensive VM runs:
 3. Design target-unique oracle markers and implement the flake, VM modules,
    trigger, and initial documentation.
 4. Evaluate flake outputs and confirm package versions.
-5. Start the vulnerable scenario with a scenario subagent when available, or
-   use standalone VMs only when scenario mode is unavailable or inappropriate.
+5. Start the vulnerable scenario with a scenario subagent only when the
+   capability gate passes; otherwise, the main agent owns the managed scenario.
+   Use standalone VMs only when scenario mode is unavailable or inappropriate.
 6. Use VM-operator subagents, printed SSH commands, popup VM, or test-driver
    shell to check target health and run the trigger manually inside the lab.
 7. Repeat the manual trigger against the fixed scenario.
 8. Encode the verified workflow in `test.py`.
-9. Run the complete vulnerable automated test, preferably through a
-   test-runner subagent while the main agent monitors for stuck execution.
+9. Run the complete vulnerable automated test through a test-runner subagent
+   only when the capability gate passes; otherwise, the main agent owns it.
 10. Run the complete fixed automated test the same way.
 11. Update the README with verified commands and observations.
 12. Clean or ignore generated artifacts and inspect `git status --short`.
@@ -428,27 +482,35 @@ exploit can otherwise wait forever and be mistaken for successful mitigation.
   supports them.
 - Bound custom loops by elapsed time or attempt count and fail with diagnostic
   output when the limit is reached.
-- Give host-side builds and test runs a finite but realistic deadline. Account
-  for first-time Nix downloads and builds rather than choosing an arbitrarily
-  short limit.
+- Enforce the hard limits defined above even during first-time Nix downloads
+  and builds. If the 30-minute test limit is insufficient, report a blocker;
+  do not silently extend it.
 - On timeout, collect useful service status, journal, process, or network
   diagnostics and report the timeout. Never report a timeout as a passing
   fixed result by itself.
 
-Run commands from the repository root, normally inside `nix develop`:
+Use the NICE Archive CLI for repository workflows whenever it provides the
+operation. This includes case discovery, flake updates, scenarios, standalone
+VMs, and vulnerable/fixed tests. Do not replace a supported CLI operation with
+a guessed flake attribute, direct QEMU invocation, or ad hoc container command.
+
+Run CLI commands from the repository root, normally inside `nix develop`:
 
 ```bash
-nice-archive list-cves
-nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
-nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable false --popup false
-nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
-nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
+timeout --signal=TERM --kill-after=30s 5m nice-archive list-cves
+timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable false --popup false
+timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
+timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
 ```
 
 Outside the development shell, use `nix run . -- <command arguments>`. Prefer
-the CLI over guessing generated Nix output names. Be aware that `test` and
-`scenario` stage the selected case with `git add` so Git-backed flakes can see
-new files; always review the index afterward.
+the CLI over guessing generated Nix output names. Direct `nix build`, `nix
+run`, or `nix eval` commands are allowed only when the CLI lacks the required
+operation or when diagnosing a CLI/generated-output failure. Record the reason,
+and perform final vulnerable/fixed validation through `nice-archive test`.
+Be aware that `test` and `scenario` stage the selected case with `git add` so
+Git-backed flakes can see new files; always review the index afterward.
 
 Do not stop after successful evaluation or build. A case is not reproduced
 until the trigger has been observed manually in the VM and both automated
@@ -479,8 +541,9 @@ The strict content form is:
   version, vulnerability class, preconditions, and impact.
 - `Root cause`: at most two short paragraphs describing the flawed behavior
   and the fix. Do not retell the disclosure history.
-- `Reproduction`: one table containing generator, VM topology, package/variant
-  selection, trigger, target-unique marker, and machine-checkable oracle.
+- `Reproduction`: one table containing generator, each VM and service role,
+  security-relevant communication path, package/variant selection, trigger,
+  target-unique marker, and machine-checkable oracle.
 - `Run and results`: only verified manual and automated commands, followed by a
   table with vulnerable/fixed expected behavior, observed behavior, and test
   status. Clearly label commands that were not run.
@@ -530,6 +593,9 @@ The task is complete only when all applicable items are true:
 - manual vulnerable behavior was observed in an isolated VM;
 - manual fixed behavior was observed using the same trigger;
 - vulnerable and fixed automated tests both ran and passed;
+- ordinary commands, readiness checks, tests, and scenarios obeyed the
+  5/5/30/45-minute hard limits and the two-minute/five-minute watchdog;
+- final scenario and test validation used the NICE Archive CLI;
 - `test.py` checks the security effect with applicable assertion blocks;
 - the oracle relies on target-unique guest markers rather than only generic
   machine behavior;

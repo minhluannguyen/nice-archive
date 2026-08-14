@@ -49,8 +49,9 @@ If you are an LLM agent working on a new report, follow this order:
 7. Design the VM topology and target-unique oracle markers.
 8. Decide which NICE Archive library generator fits.
 9. Implement the Nix files.
-10. Start the VM scenario with a scenario subagent when available, or use
-   standalone VMs only when scenario mode is unavailable or inappropriate.
+10. Start the VM scenario with a scenario subagent only when the capability
+    gate passes; otherwise, the main agent owns the managed scenario. Use
+    standalone VMs only when scenario mode is unavailable or inappropriate.
 11. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
     shell for manual reproduction.
 12. Translate the successful manual workflow into `test.py`.
@@ -83,9 +84,10 @@ requirements:
 - Follow existing case style before inventing a new structure. Heartbleed is a
   good model for historical user-space packages.
 - Use the scenario helper plus SSH for manual validation when possible.
-- When subagents are available, use a scenario subagent to keep scenario mode
-  running and VM-operator subagents to SSH into the generated VMs and simulate
-  the exploit from inside the lab.
+- When the subagent capability gate passes, use a scenario subagent to keep
+  scenario mode running and VM-operator subagents to SSH into generated VMs and
+  simulate the exploit from inside the lab. Otherwise, the main agent owns the
+  managed scenario.
 - Use standalone VMs for manual validation when the NixOS test driver is not a
   good fit.
 - Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
@@ -131,6 +133,28 @@ a managed session, bounded readiness checks, and explicit termination. If a
 command unexpectedly requests input or stops progressing, terminate it at the
 deadline and diagnose the shell or invocation.
 
+Enforce these hard wall-clock limits from process launch:
+
+| Activity | Maximum runtime |
+| --- | --- |
+| Ordinary command | 5 minutes |
+| VM or service readiness | 5 minutes |
+| Complete NixOS test, including build and execution | 30 minutes |
+| Complete interactive scenario, including startup, validation, and cleanup | 45 minutes |
+
+Set both the command tool deadline and a process-level watchdog where
+available. Do not extend a running deadline or restart merely to reset it.
+Timeout status `124`, forced termination, or expiration of any limit is a
+failure or blocker, not a passing fixed result.
+
+Poll managed sessions at least every two minutes. Track meaningful new output
+or a successful bounded VM/test-driver response. If neither occurs for five
+continuous minutes, terminate the command even when its overall hard limit has
+not expired. Enforce the inactivity cutoff independently: poll at or before two
+and four minutes, then check at five minutes rather than waiting for a
+six-minute poll. Repeated identical output and mere process existence are not
+progress.
+
 ### Subagent orchestration
 
 When an LLM agent has a subagent facility, use it to split long-running VM
@@ -138,12 +162,21 @@ operations from orchestration. Subagents are execution helpers; the main agent
 still owns research, safety decisions, the watchdog, test termination
 decisions, documentation, and final claims.
 
+Subagent availability alone is insufficient. A subagent may own a scenario or
+test only when it immediately returns a detached session handle that the main
+agent can poll and terminate independently. If the call is synchronous,
+non-cancellable, or hides the process handle, the main agent must own the
+managed command. Use subagents only for bounded finite work in that mode; never
+block the main agent waiting for a subagent whose scenario requires manual
+termination.
+
 For manual validation, use this pattern when practical:
 
 1. Start `nice-archive scenario --case <case> --vulnerable <true|false>
    --popup false` in a dedicated scenario subagent. The subagent should keep
    the scenario running as a managed session, capture the printed SSH commands,
-   and report readiness plus new output.
+   and report readiness plus new output. Apply the 45-minute process-level
+   deadline from launch.
 2. Spawn one or more VM-operator subagents to connect with the printed SSH
    commands. They should run bounded guest-side health checks, execute the
    trigger inside the VM, collect logs and oracle evidence, and report exact
@@ -158,11 +191,13 @@ standalone VMs. VM-operator subagents must use only guest fixtures and must
 never target host `localhost`, unrelated local services, or public systems.
 
 For automated validation, spawn a test-runner subagent for each long-running
-`nice-archive test` command when available. The subagent reports progress from
-the managed test session, but the main agent decides whether the test is stuck
-under the two-minute polling and five-minute inactivity watchdog. If the
-watchdog fires, the main agent instructs the subagent to interrupt or
-terminate the test, or terminates the managed session itself if needed.
+`nice-archive test` command only when the capability gate passes. The subagent
+reports progress from the managed test session, but the main agent decides
+whether the test is stuck under the two-minute polling and five-minute
+inactivity watchdog. If the watchdog fires, the main agent instructs the
+subagent to interrupt or terminate the test, or terminates the managed session
+itself. Otherwise, the main agent owns the managed test command. Apply the
+30-minute process-level deadline from launch.
 
 ### Isolation gate
 
@@ -371,6 +406,27 @@ Most cases fit one of these shapes (but some exploits need more complex topologi
 | Graphical | The exploit requires X11, LibreOffice, browser UI, or OCR | `desktop`, `server` |
 
 Use clear node names because those names become Python variables in `test.py`.
+
+Choose the minimum realistic topology. Preserve every service, network,
+privilege, and trust boundary that is a precondition of the vulnerability, but
+do not add machines that have no independent role.
+
+- Run a required intermediary on its own VM when it represents a distinct
+  deployment role. A reverse proxy, gateway, or load balancer should be on a
+  proxy VM separate from the backend server.
+- Apply the same separation to required mail relays, databases, identity
+  providers, DNS servers, file servers, and protocol intermediaries when the
+  exploit depends on traffic or trust crossing that boundary.
+- Co-locate services only when that is a realistic deployment and separation
+  cannot change the security behavior. Explain intentional co-location.
+- Every VM must have a stated role. Removing one should either violate a
+  documented precondition or reduce isolation; otherwise, omit it.
+- Keep invariant infrastructure and communication paths identical in the
+  vulnerable and fixed scenarios.
+
+Document the path through the topology, for example
+`attacker -> proxy -> backend`, and state what security-relevant processing
+occurs at each boundary.
 
 ## 4. Choose the generator
 
@@ -760,10 +816,12 @@ assert status != 124, f"exploit timed out instead of producing a result: {output
 ```
 
 Also set connect and read timeouts inside network PoCs. Bound custom retry loops
-by elapsed time or attempt count. Host-side Nix builds and CLI tests should
-have a finite but realistic deadline that allows for initial downloads and
-builds. On timeout, collect diagnostics and fail clearly; never count a timeout
-alone as a passing fixed result.
+by elapsed time or attempt count. VM and service readiness must fail after five
+minutes. Complete CLI-driven NixOS tests, including initial downloads and
+builds, must fail after 30 minutes. Interactive scenarios must terminate after
+45 minutes. The two-minute polling and five-minute inactivity cutoff still
+apply and may terminate an operation earlier. On timeout, collect diagnostics
+and fail clearly; never count a timeout alone as a passing fixed result.
 
 ## 8. Add standalone VMs when useful
 
@@ -809,7 +867,16 @@ nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 
 ## 9. Use the CLI for testing and debugging
 
-Run CLI commands from the repository root.
+Use the NICE Archive CLI whenever it supports the operation. Use it for case
+discovery, flake updates, scenarios, standalone VMs, and vulnerable/fixed
+tests. Do not replace supported CLI operations with guessed flake attributes,
+direct QEMU commands, or ad hoc containers.
+
+Run CLI commands from the repository root. Outside the development shell, use
+`nix run . --` followed by the same NICE Archive arguments. Direct `nix build`,
+`nix run`, or `nix eval` is allowed only when no CLI operation fits or when
+diagnosing a CLI/generated-output failure. Record the reason and perform final
+vulnerable/fixed validation through `nice-archive test`.
 
 List cases:
 
@@ -824,11 +891,10 @@ nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true
 nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false
 ```
 
-For LLM agents with subagents, run each long-running test command in a
-test-runner subagent. The main agent should poll the subagent for meaningful
-new output or bounded VM/test-driver responses, decide whether the test is
-stuck, and issue the interrupt or termination instruction if the watchdog
-threshold is reached.
+For LLM agents, use a test-runner subagent only when it returns a detached,
+cancellable session handle. Otherwise, the main agent must own the managed
+test command. Poll at least every two minutes, apply the five-minute inactivity
+cutoff, and enforce the 30-minute total test limit.
 
 Save a full log with a custom filename:
 
@@ -1080,7 +1146,7 @@ At most two short paragraphs describing the flawed behavior and the fix.
 | Field | Value |
 | --- | --- |
 | Generator | `<NICE Archive generator>` |
-| Topology | `<VM roles>` |
+| Topology | `<each VM, service role, and communication path>` |
 | Package selection | `<pins and variants>` |
 | Trigger | `<PoC or regression trigger>` |
 | Target marker | `<target-unique guest evidence>` |
@@ -1222,6 +1288,10 @@ Before considering the report done:
       available; any derived trigger cites its authoritative basis.
 - [ ] `flake.nix` uses the appropriate generator.
 - [ ] VM names are clear and match variables in `test.py`.
+- [ ] The topology is the minimum realistic model: required service and trust
+      boundaries use separate VMs, while unnecessary helper VMs are omitted.
+- [ ] Required intermediaries such as proxies are not co-located with the
+      backend unless that deployment is realistic and the choice is explained.
 - [ ] Any graphical test sets `isGraphics = true` and `enableOCR = true`.
 - [ ] The README explains why the chosen generator fits the age and shape of the vulnerability.
 - [ ] Manual reproduction steps use scenario SSH, popup VMs, or standalone VMs.
@@ -1235,6 +1305,14 @@ Before considering the report done:
 - [ ] Each CVE is isolated on its own working directory.
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
+- [ ] Ordinary commands, readiness checks, complete tests, and scenarios obey
+      the 5/5/30/45-minute hard limits.
+- [ ] Managed sessions are polled at least every two minutes and terminated
+      after five minutes without meaningful output or a bounded response.
+- [ ] Final scenarios, standalone VMs, flake updates, and vulnerable/fixed
+      tests use the NICE Archive CLI whenever it supports the operation.
+- [ ] A subagent owns a long-running process only when the main agent receives
+      a detached session handle it can poll and terminate independently.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,
       and cost metadata, using `not available` with a reason for unexposed
       values.
