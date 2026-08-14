@@ -261,12 +261,16 @@ and fixed variants with a machine-checkable oracle. Additional details or a
 preferred PoC can be supplied in the same request.
 
 The contract also makes the agent identify its command shell before exploration,
-create a dedicated Git branch for each CVE, reuse or source a PoC from
+create a dedicated working directory for each CVE, reuse or source a PoC from
 authoritative material, plant target-unique markers for the oracle, bound
 potentially blocking operations, and record model, harness, elapsed time, token
 usage, and cost in the completed case README. Unavailable runtime metadata
 must be labeled rather than estimated, and missing per-run telemetry does not
 block completion.
+
+Generated case READMEs follow a compact required section order and describe
+their own evidence directly. They do not compare themselves with or cite other
+CVE example cases.
 
 When an agent harness supports subagents, the workflow asks the main agent to
 orchestrate scenario and test helpers: a scenario subagent keeps
