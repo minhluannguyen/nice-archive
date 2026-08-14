@@ -33,12 +33,6 @@ proves both vulnerable and fixed behavior.
   or unrelated CVE cases.
 - Run `git status --short` before editing and again before reporting. Preserve
   all user changes, including changes in files relevant to the task.
-- Create or use a dedicated Git branch for each CVE before implementation, for
-  example `cve/CVE-YYYY-NNNN-short-name`, unless the user explicitly asks to
-  stay on the current branch. If the branch already exists, inspect it before
-  adding work. Do not switch away from uncommitted user changes without
-  preserving them or asking how to proceed. Do not mix unrelated CVE cases on
-  one branch.
 - Do not use destructive Git commands. Do not remove files unless their
   ownership and purpose are clear.
 - Treat fetched PoCs and historical software as untrusted. Inspect them before
@@ -406,8 +400,7 @@ host secrets.
 Work from cheap checks to expensive VM runs:
 
 1. Inspect repository state, documentation, similar cases, and any existing
-   target case, then create or switch to the dedicated CVE branch before
-   implementation.
+   target case.
 2. Complete source research and choose verified package pins.
 3. Design target-unique oracle markers and implement the flake, VM modules,
    trigger, and initial documentation.
@@ -463,19 +456,45 @@ variants have been run, unless an external blocker makes that impossible.
 
 ## Case Documentation
 
-Keep the case `readme.md` self-contained and source-backed. It must cover:
+Keep the case `readme.md` compact, self-contained, and source-backed. Existing
+cases may inform implementation, but the README must not name, cite, compare
+itself with, or describe itself as modeled after another CVE case. Explain this
+case directly from its own evidence and authoritative external sources.
 
-- description, affected and fixed versions, impact, and root cause;
-- required configuration and chosen VM topology;
-- generator and package selection strategy;
-- advisory, patch, release, PoC, distribution, and nixpkgs references;
-- exploit provenance, modifications, and safety limits;
-- target-unique markers, credentials, users, or secrets used by the oracle;
-- exact manual reproduction commands and observed behavior;
-- vulnerable and fixed CLI test commands;
-- the `test.py` oracle and what each assertion proves;
-- verified limitations or environmental caveats;
-- a reproduction metadata section completed after validation.
+Use this exact section order:
+
+1. `# CVE-YYYY-NNNN: Short title`
+2. `## Summary`
+3. `## Root cause`
+4. `## Reproduction`
+5. `## Run and results`
+6. `## Provenance`
+7. `## Limitations and safety`
+8. `## Reproduction metadata`
+9. `## References`
+
+The strict content form is:
+
+- `Summary`: one table containing CVE, software, vulnerable version, fixed
+  version, vulnerability class, preconditions, and impact.
+- `Root cause`: at most two short paragraphs describing the flawed behavior
+  and the fix. Do not retell the disclosure history.
+- `Reproduction`: one table containing generator, VM topology, package/variant
+  selection, trigger, target-unique marker, and machine-checkable oracle.
+- `Run and results`: only verified manual and automated commands, followed by a
+  table with vulnerable/fixed expected behavior, observed behavior, and test
+  status. Clearly label commands that were not run.
+- `Provenance`: one table containing advisory, fix/patch, release notes, PoC or
+  regression test, local modifications, and nixpkgs source revisions.
+- `Limitations and safety`: concise bullets. Write `None known` when there are
+  no verified limitations; do not add generic filler.
+- `Reproduction metadata`: one table using the required fields below.
+- `References`: a deduplicated list of directly relevant external sources.
+
+Do not add separate `Description`, `Overview`, `Assertions`, or `Interactive
+debugging` sections when their content fits the required form. Avoid long
+background explanations, implementation walkthroughs, repeated commands, and
+claims not needed to understand or verify the reproduction.
 
 The reproduction metadata section must state that the case was reproduced by
 an LLM agent and record:
@@ -515,9 +534,11 @@ The task is complete only when all applicable items are true:
 - the oracle relies on target-unique guest markers rather than only generic
   machine behavior;
 - the README records accurate provenance, commands, results, and references;
+- the README follows the strict compact section order and contains no
+  comparisons or citations to other CVE example cases;
 - the README records LLM reproduction metadata with unavailable values clearly
   identified;
-- the CVE work is isolated on its own Git branch unless the user explicitly
+- the CVE work is isolated on its own working directory unless the user explicitly
   requested otherwise;
 - no unrelated files or generated VM artifacts are included in the change.
 

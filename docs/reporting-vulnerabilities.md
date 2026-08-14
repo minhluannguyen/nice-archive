@@ -41,9 +41,8 @@ If you are an LLM agent working on a new report, follow this order:
 1. Record the user shell and command-runner shell separately, plus UTC start
    time, model, harness, and which usage metadata the runtime exposes.
 2. Do read-only discovery first and search for an existing matching case.
-3. Create or switch to a dedicated Git branch for this CVE before
-   implementation, unless the user explicitly asks to stay on the current
-   branch.
+3. Create a dedicated working directory for this CVE before
+   implementation, unless the user explicitly asks to do otherwise. 
 4. Identify vulnerable and fixed versions.
 5. Record exploit provenance before copying or adapting exploit code.
 6. Search nixpkgs history before building vulnerable software from source.
@@ -95,8 +94,7 @@ requirements:
   independent exploit from scratch.
 - Convert the manual workflow into `test.py`.
 - Plant target-unique flags, credentials, users, tokens, or records for the
-  oracle. Do not rely only on generic machine content such as normal
-  `/etc/passwd` entries.
+  oracle.
 - End `test.py` with framework assertion blocks whenever one fits.
 - Bound VM waits, network operations, exploit processes, and fixed-variant
   checks with finite timeouts.
@@ -190,26 +188,7 @@ lab cannot start, report the blocker instead of falling back to the host.
 
 ## 1. Create a case directory
 
-Before implementation, put each CVE on its own branch so multiple
-reproductions can proceed without staging or generated-artifact conflicts:
-
-```bash
-git switch -c cve/CVE-YYYY-NNNN-short-name
-```
-
-If the branch already exists, inspect it before adding work:
-
-```bash
-git switch cve/CVE-YYYY-NNNN-short-name
-git status --short
-```
-
-Do not switch branches with unrelated uncommitted user changes in the worktree.
-Preserve or ask about those changes first. For truly parallel local execution,
-use separate branches in separate worktrees or clones so each VM/test run owns
-its generated artifacts.
-
-Use the directory shape:
+Before implementation, create a dedicated working directory for the CVE case. The default location is under `cves/` with a name that follows the convention:
 
 ```bash
 mkdir -p cves/cve-yyyy-nnnn-short-name/exploit
@@ -255,10 +234,7 @@ For each report, decide what the automated test should prove:
 ### Unique markers and lab credentials
 
 Design the oracle around evidence that is unique to this target VM and this
-CVE case. Generic operating-system output is usually too weak: `root:` in
-`/etc/passwd`, a default login shell, a common service banner, or a normal HTTP
-status code may appear on every machine in the topology and does not prove that
-the attacker crossed the intended boundary.
+CVE case.
 
 Good marker patterns include:
 
@@ -266,19 +242,13 @@ Good marker patterns include:
   `NICE-CVE-YYYY-NNNN-SERVER-FLAG`;
 - a special target-only user with a flag-style GECOS field, password, or home
   directory marker;
+- a footprint left by the attacker, e.g., a file, a line in root-owned files (`/etc/passwd`), a newly created root-owned account, etc., that will be asserted on by the victim machine after the exploit runs;
 - an admin account whose username and password are unique to the case and can
   later be used by the attacker to prove credential disclosure;
 - a database row, API token, email, session cookie, or service-side secret that
-  exists only on the protected target; and
+  was intentionally planted from the start of the VM and can be used to prove disclosure; or
 - a root-owned marker file or account created only when a privilege boundary is
   crossed.
-
-For path traversal or file disclosure, prefer reading a target-specific secret
-file when the vulnerability allows it. If the public PoC naturally reads
-`/etc/passwd`, add a unique target-only user or GECOS marker and assert on that
-marker instead of only checking for `root:`. For credential disclosure, verify
-the leaked credential by using it to access a protected guest resource when the
-application flow allows that extra check.
 
 Keep these markers deterministic and guest-only. They are test fixtures, not
 real secrets. Document where each marker is planted, why it proves the security
@@ -1078,89 +1048,106 @@ Recommended order:
 
 ## 13. Write the case README
 
-Each CVE README should be understandable without reading the implementation.
+Each CVE README must be compact and understandable without reading the
+implementation. Existing cases may guide implementation, but the resulting
+README must not name, cite, compare itself with, or claim to be modeled after
+another CVE case. Describe the case using its own evidence and authoritative
+external sources.
 
-Recommended structure:
+Use this required structure and section order:
 
 ````markdown
 # CVE-YYYY-NNNN: short title
 
-## Description
+## Summary
 
-## Overview
+| Field | Value |
+| --- | --- |
+| CVE | `CVE-YYYY-NNNN` |
+| Software | `<name>` |
+| Vulnerable version | `<version or commit>` |
+| Fixed version | `<version or commit>` |
+| Vulnerability class | `<class or CWE>` |
+| Preconditions | `<required configuration or access>` |
+| Impact | `<security effect>` |
 
-- Affected software:
-- Impact:
-- Vulnerable versions:
-- Fixed versions:
-- Disclosure date:
+## Root cause
 
-## Reproduction design
+At most two short paragraphs describing the flawed behavior and the fix.
 
-Explain the VM topology, package-version strategy, and why the chosen generator
-fits this CVE.
+## Reproduction
 
-## Exploit provenance
+| Field | Value |
+| --- | --- |
+| Generator | `<NICE Archive generator>` |
+| Topology | `<VM roles>` |
+| Package selection | `<pins and variants>` |
+| Trigger | `<PoC or regression trigger>` |
+| Target marker | `<target-unique guest evidence>` |
+| Oracle | `<assertion and security property>` |
 
-- Advisory:
-- Patch or fixing commit:
-- Exploit source:
-- Derived helper source artifact, if rewritten:
-- Local changes made for this VM:
-- Safety limits or simplifications:
+## Run and results
 
-## Manual reproduction
-
-Use the scenario helper with SSH or popup VM windows where possible:
-
-```bash
-nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
+```text
+<verified manual command>
+<vulnerable automated test command>
+<fixed automated test command>
 ```
 
-Then SSH into the printed VM command and run the exploit trigger directly
-inside the VM.
+| Variant | Expected | Observed | Status |
+| --- | --- | --- | --- |
+| Vulnerable | `<effect>` | `<actual observation>` | `<pass/fail/not run>` |
+| Fixed | `<effect absent and service healthy>` | `<actual observation>` | `<pass/fail/not run>` |
 
-If the case uses standalone VMs, show each terminal and port-forwarding step
-needed to wire the machines together.
+## Provenance
 
-Expected vulnerable result:
+| Item | Source or local change |
+| --- | --- |
+| Advisory | `<URL>` |
+| Fix or patch | `<URL/commit>` |
+| Release notes | `<URL>` |
+| PoC or regression test | `<URL and author>` |
+| Local modifications | `<concise changes>` |
+| Nixpkgs sources | `<revisions and package versions>` |
 
-Expected fixed result:
+## Limitations and safety
 
-## Running automated tests
-
-Show the `nice-archive test` commands for vulnerable and fixed variants.
-
-## Automated oracle
-
-The machine-checkable reproduction is implemented in `test.py`. Summarize the
-assertion blocks used there, the target-unique markers they check, and what
-security property each one proves. For multi-VM cases, explain which evidence
-is checked on the target and which attacker output is compared against the
-target's original marker.
-
-## Interactive debugging
-
-## Assertions
+- `<verified limitation, safety boundary, or None known>`
 
 ## Reproduction metadata
 
-- Reproduced by: LLM agent
-- Model: `<exact runtime-reported model, or not available with reason>`
-- Agent/harness: `<tool and version, or not available with reason>`
-- Date: `<YYYY-MM-DD>`
-- Command shell: `<bash, zsh, fish, or other>`
-- Start time: `<UTC timestamp, or not available with reason>`
-- End time: `<UTC timestamp, or not available with reason>`
-- Elapsed time: `<measured wall-clock duration, or not available with reason>`
-- Input tokens: `<runtime-reported value, or not available with reason>`
-- Output tokens: `<runtime-reported value, or not available with reason>`
-- Total tokens: `<runtime-reported value, or not available with reason>`
-- Cost: `<platform value, sourced estimate, or not available with reason>`
-- Telemetry source: `<runtime, UI, user-provided, calculated, or not exposed by harness>`
+| Field | Value |
+| --- | --- |
+| Reproduced by | LLM agent |
+| Model | `<runtime value or not available with reason>` |
+| Agent/harness | `<tool and version or not available with reason>` |
+| Date | `<YYYY-MM-DD>` |
+| Command shell | `<bash, zsh, fish, or other>` |
+| Start time | `<UTC timestamp or not available with reason>` |
+| End time | `<UTC timestamp or not available with reason>` |
+| Elapsed time | `<measured duration or not available with reason>` |
+| Input tokens | `<runtime value or not available with reason>` |
+| Output tokens | `<runtime value or not available with reason>` |
+| Total tokens | `<runtime value or not available with reason>` |
+| Cost | `<platform value, sourced estimate, or not available with reason>` |
+| Telemetry source | `<runtime, UI, user-provided, calculated, or not exposed>` |
 
 ## References
 ````
+
+Keep the strict form compact:
+
+- use one table for summary, reproduction, results, provenance, and metadata;
+- keep root cause to two short paragraphs;
+- include commands once and include only commands actually verified, marking
+  unexecuted commands as `not run`;
+- use `None known` instead of filler when no limitation is known;
+- deduplicate references and include only sources directly relevant to this
+  CVE;
+- do not add separate `Description`, `Overview`, `Assertions`, or `Interactive
+  debugging` sections when the required tables already contain that material;
+- do not include comparisons, implementation ancestry, or links to other CVE
+  example cases.
 
 Include exact commands that were verified. Prefer CLI commands first, because
 the CLI knows the modern output naming convention and legacy fallback.
@@ -1241,8 +1228,11 @@ Before considering the report done:
 - [ ] Any old-kernel test uses `oldKernelTestsGenerator` unless it needs custom low-level behavior.
 - [ ] The case README explains the topology, exploit, assertions, and commands.
 - [ ] The case README points to `test.py` as the automated oracle.
-- [ ] Each CVE is isolated on its own Git branch or worktree when multiple CVEs
-      are in flight.
+- [ ] The case README follows the required compact section order without
+      duplicate sections or unnecessary implementation narrative.
+- [ ] The case README does not name, cite, or compare itself with another CVE
+      example case.
+- [ ] Each CVE is isolated on its own working directory.
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,

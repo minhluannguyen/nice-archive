@@ -46,11 +46,6 @@ Before exploring the repository:
    cost metrics are available. Do not guess unavailable metadata.
 6. Search for an existing case with the same CVE ID. Complete it in place when
    it represents the same vulnerability.
-7. Create or switch to a dedicated Git branch for this CVE before
-   implementation, for example `cve/CVE-YYYY-NNNN-short-name`, unless the user
-   explicitly asks to stay on the current branch. Do not switch away from
-   uncommitted user changes without preserving them or asking how to proceed.
-   Do not mix unrelated CVE cases on one branch.
 
 Shell execution gate
 
@@ -321,9 +316,33 @@ commands may stage case files.
 
 Case README
 
-Document the CVE facts, sources, topology, generator, package pins, PoC
-provenance, changes, safety limits, target-unique markers, exact manual
-commands, automated commands, oracle, observed results, and limitations.
+Write a compact, self-contained README. Existing cases may guide implementation,
+but do not name, cite, compare with, or say the reproduction is modeled after
+another CVE case. Describe this CVE only from its own evidence and authoritative
+external sources.
+
+Use exactly this section order:
+
+1. # CVE-YYYY-NNNN: Short title
+2. ## Summary
+3. ## Root cause
+4. ## Reproduction
+5. ## Run and results
+6. ## Provenance
+7. ## Limitations and safety
+8. ## Reproduction metadata
+9. ## References
+
+Use one compact table for Summary, Reproduction, Run and results, Provenance,
+and Reproduction metadata. Keep Root cause to at most two short paragraphs.
+Include only verified commands and observations; label anything not run. Do not
+add separate Description, Overview, Assertions, or Interactive debugging
+sections, duplicate commands, lengthy history, or implementation walkthroughs.
+
+The README must still identify affected/fixed versions, prerequisites, impact,
+generator, topology, package pins, trigger, target-unique marker, oracle,
+vulnerable/fixed results, PoC modifications, safety limits, limitations, and
+external references.
 
 After validation, add a Reproduction metadata section stating that the CVE was
 reproduced by an LLM agent. Include:
