@@ -333,25 +333,40 @@ and pass/fail decisions.
 ### Package source strategy
 
 Before building vulnerable software from source, check whether nixpkgs already
-contains the vulnerable and fixed versions. The tool `nix-versions` can help find historical nixpkgs revisions with the right versions, it has already been added to the repository and can be used with:
+contains the vulnerable and fixed versions. Prefer
+[nixpkgs-multiverse](https://github.com/fzakaria/nixpkgs-multiverse), then use
+`nix-versions` as a fallback. Multiverse can query its index by exact version,
+date, release tag, or commit without first evaluating every nixpkgs revision:
 
 ```bash
-# In the repository root, searching for curl version 7.83:
-$ nix-versions 'bin/curl@7.83'
-Name            Version  NixInstallable                  VerBackend  
-curlWithGnuTls  7.83.1   nixpkgs/d57f20b#curlWithGnuTls  nixhub      
-curlMinimal     7.83.0   nixpkgs/7c035db#curlMinimal     nixhub      
-curlMinimal     7.83.1   nixpkgs/78e748f#curlMinimal     nixhub      
-curlFull        7.83.0   nixpkgs/556ce9a#curlFull        nixhub      
-curlFull        7.83.1   nixpkgs/78e748f#curlFull        nixhub  
+# Exact version and its revision range.
+nix run 'github:fzakaria/nixpkgs-multiverse#mvs' -- query when curl 7.83.0
+
+# Package version at a date, and release-tag provenance.
+nix run 'github:fzakaria/nixpkgs-multiverse#mvs' -- query at 2022-03-15 python3
+nix run 'github:fzakaria/nixpkgs-multiverse#mvs' -- query rev 24.11
+
+# Nested Python and kernel package sets at immutable revision labels.
+nix eval --raw 'github:fzakaria/nixpkgs-multiverse#2018-01-01-f59a0f7f1a6d.python3Packages.requests.version'
+nix eval --raw 'github:fzakaria/nixpkgs-multiverse#2022-03-14-73ad5f9e147c.linuxPackages.kernel.version'
+
+# Fallback search using nix-versions.
+nix-versions 'bin/curl@7.83'
 ```
 
-`nix-versions` uses many sources to find historical nixpkgs revisions, you can check them directly:
+The multiverse index covers top-level attributes. Select a revision before
+evaluating nested sets such as `python3Packages` or `linuxPackages`. Release
+tags move as backports arrive, so record and pin the resolved full commit in a
+case. If multiverse has no suitable result, `nix-versions` searches these
+sources:
+
 - [Nixpkgs History](https://history.nix-packages.com)
 - [NixHub](https://nixhub.io)
 - [Lazamar](https://lazamar.co.uk/nix-versions/)
 
-Run `nix-versions --help` or visit their [documentation](https://nix-versions.alwaysdata.net/getting-started/installing/) for more details.
+See the multiverse [Nix API](https://github.com/fzakaria/nixpkgs-multiverse/blob/main/docs/nix-api.md)
+and [`mvs` CLI](https://github.com/fzakaria/nixpkgs-multiverse/blob/main/docs/cli.md),
+or run `nix-versions --help` for fallback usage.
 
 Use this priority order:
 1. Prioritize existing nixpkgs packages at historical nixpkgs revisions unless the package is a system-level component, distribution service, kernel, or tightly coupled dependency set.
