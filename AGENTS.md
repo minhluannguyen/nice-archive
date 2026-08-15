@@ -221,6 +221,55 @@ query unrelated APIs, approximate tokens from text length, or allocate a
 subscription price to one run. Continue the reproduction and record the reason
 the value is unavailable.
 
+## Framework Suitability Gate
+
+Before creating or modifying a case, adapting a PoC, selecting package pins, or
+starting an isolated environment, determine whether the CVE fits NICE Archive.
+Use minimal read-only research from authoritative sources to make this decision
+early.
+
+A CVE is in scope only when all of these are true:
+
+- the vulnerable target is software or a package that runs on Linux;
+- the affected behavior and required configuration apply to a Linux build;
+- the vulnerable and fixed behavior can reasonably be represented with Nix,
+  NixOS, Linux VMs, or Linux containers; and
+- a machine-checkable Linux-side oracle is possible.
+
+Cross-platform software is in scope only when authoritative evidence confirms
+that its Linux build is affected by the same vulnerability. A Linux attacker,
+client, build host, or diagnostic tool does not make a non-Linux target
+eligible.
+
+Reject the reproduction as out of scope when the vulnerable target is:
+
+- Windows-only software, a Windows component, or behavior specific to Windows;
+- macOS-, iOS-, or Apple-platform-specific software or behavior;
+- Android software, mobile applications, or mobile-platform-specific behavior;
+- hardware, firmware, microcode, BIOS/UEFI, or a flaw requiring physical
+  equipment or a hardware device; or
+- a hosted product with no reproducible affected Linux software/package that
+  can be run inside this framework.
+
+If platform applicability is uncertain, perform only enough additional
+read-only research to resolve it. Do not begin implementation while eligibility
+is unresolved.
+
+When the CVE is out of scope, stop before creating a case directory or running
+any target or PoC. Return a compact rejection report containing:
+
+```text
+CVE:
+Framework eligibility: out of scope
+Affected target/platform:
+Reason:
+Evidence:
+References:
+```
+
+Do not leave a partial case for a CVE rejected by this gate. Suggest a Linux
+software CVE only when the user explicitly asks for an alternative.
+
 ## Required Discovery
 
 Do read-only discovery before implementation. Read at least:
