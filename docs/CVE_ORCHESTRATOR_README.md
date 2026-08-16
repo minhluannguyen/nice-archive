@@ -12,7 +12,8 @@ For every attempt it records:
 - wall-clock execution time
 - OpenCode exit code / timeout state
 - agent-declared reproduction result (`success`, `failure`, or `inconclusive`)
-- best-effort OpenCode token, cost, model, LLM-call, and tool-call metadata from JSON events
+- best-effort OpenCode input, output, reasoning, cache, total token, cost,
+  model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
 - OpenRouter prompt/completion/reasoning/cached token counts, provider, model, latency, and cost when an OpenRouter generation ID is available
 
@@ -109,6 +110,8 @@ nice-archive/
         ├── summary.jsonl
         ├── CVE-2023-50268/
         │   ├── state.json
+        │   ├── readme-handoff.json
+        │   ├── readme-handoff.md
         │   └── attempt-01/
         │       ├── result.json
         │       ├── opencode-output.jsonl
@@ -126,9 +129,17 @@ nice-archive/
 
 ```text
 cve,status,attempts,wall_time_seconds,opencode_input_tokens,
-opencode_output_tokens,opencode_total_tokens,opencode_tool_calls,
+opencode_output_tokens,opencode_reasoning_tokens,
+opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
 opencode_cost,openrouter_reasoning_tokens,openrouter_cost,worktree_ref,...
 ```
+
+Each CVE directory also contains a README handoff pair:
+
+- `readme-handoff.json`: machine-readable state, metadata, agent result, and
+  artifact paths for a later README-update LLM.
+- `readme-handoff.md`: the same information in a compact human-readable form,
+  including an instruction to avoid inventing missing metadata.
 
 ## 5. Success/failure contract
 
@@ -138,6 +149,9 @@ worktree root before it finishes:
 The built-in prompt also tells the agent to stay in the assigned detached
 worktree directory and not create, switch, or require a separate Git branch for
 the experiment.
+
+The orchestrator launches OpenCode with `--dir <worktree>` so tool writes land
+in the assigned per-CVE worktree, not in the original repository checkout.
 
 ```json
 {
@@ -197,7 +211,31 @@ If no generation IDs are exposed:
 - with `--workers 1`, the tool can calculate an OpenRouter API-key spend delta before/after each CVE;
 - with multiple workers, a single key's spend delta cannot safely be assigned to an individual CVE, so only the overall batch spend delta is recorded.
 
-## 9. Permissions and isolation
+## 9. Metadata probe
+
+Run a harmless fake-CVE prompt to verify that OpenCode metadata is visible in
+your environment:
+
+```bash
+cve-orchestrator \
+  --metadata-probe \
+  --workers 1 \
+  --timeout-minutes 5 \
+  --retries 0 \
+  --results /tmp/otool-probe-results \
+  --worktree-root /tmp/otool-probe-worktrees
+```
+
+The probe does not reproduce a vulnerability. It asks the agent only to write
+`EXPERIMENT_RESULT.json` and then checks the normal artifact path. Inspect:
+
+```text
+/tmp/otool-probe-results/CVE-2099-0001/state.json
+/tmp/otool-probe-results/CVE-2099-0001/readme-handoff.json
+/tmp/otool-probe-results/CVE-2099-0001/readme-handoff.md
+```
+
+## 10. Permissions and isolation
 
 By default, the script passes `--auto` so unattended jobs do not stop at routine
 tool approvals. Use `--no-auto` if you prefer stricter OpenCode permission
@@ -206,7 +244,7 @@ handling.
 For CVE/PoC experiments, run the batch on an isolated research machine/VM and
 avoid placing unrelated credentials in the agent environment.
 
-## 10. Stopping a batch
+## 11. Stopping a batch
 
 Press Ctrl-C once to request a coordinated shutdown. The orchestrator cancels
 CVEs that have not started, sends SIGTERM to every active OpenCode process
