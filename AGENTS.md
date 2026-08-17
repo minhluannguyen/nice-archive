@@ -185,6 +185,10 @@ Use this orchestration pattern when practical:
   SSH commands, keep the scenario alive, and report readiness and new output
   to the main agent. It must not run the exploit unless explicitly instructed.
   Apply the 45-minute process-level deadline when the scenario is launched.
+  Scenario startup is serialized by the NICE Archive CLI. Waiting for or
+  acquiring this lock is expected output, not a stuck scenario by itself.
+  Automated `nice-archive test` runs are not serialized by this lock and may
+  still run in parallel.
 - Spawn one or more VM-operator subagents to use the printed SSH commands for
   the relevant VMs. These subagents perform bounded guest-side health checks,
   run the exploit or trigger inside the VM, collect guest logs and oracle
@@ -552,6 +556,14 @@ timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy
 timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
 timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
 ```
+
+The `scenario` command takes an exclusive file lock before starting VMs and
+releases it when the scenario exits. By default the lock is
+`.nice-archive-scenario.lock` in the repository checkout. Override it with
+`NICE_ARCHIVE_SCENARIO_LOCK=/path/to/lock` when multiple processes use
+different working directories, or set `NICE_ARCHIVE_SCENARIO_LOCK=none` to
+disable it. This prevents concurrent scenario-mode VM labs from blocking each
+other. The lock does not apply to `test`, `vm`, or other commands.
 
 Outside the development shell, use `nix run . -- <command arguments>`. Prefer
 the CLI over guessing generated Nix output names. Direct `nix build`, `nix

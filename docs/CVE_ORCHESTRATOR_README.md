@@ -2,8 +2,8 @@
 
 `cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
 detached Git worktree directory for each CVE. It supports parallel workers,
-retries, hard attempt timeouts, resume, live interaction output, and optional
-OpenRouter metadata enrichment.
+retries, hard attempt timeouts, resume, per-CVE worktree cleanup, live
+interaction output, and optional OpenRouter metadata enrichment.
 
 ## What it records
 
@@ -17,6 +17,7 @@ For every attempt it records:
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
+- a snapshot of changed worktree files before cleanup, when cleanup is enabled
 - OpenRouter prompt/completion/reasoning/cached token counts, provider, model, latency, and cost when an OpenRouter generation ID is available
 
 The runner does not ask the LLM to estimate its own token use. Per-CVE
@@ -29,6 +30,12 @@ per visible worker: CVE, attempt, elapsed time, status, and recent sanitized
 OpenCode stdout/stderr snippets. The full raw streams are still written to the
 attempt artifacts. Use `--live` to force this display when stderr is not a TTY,
 or `--no-live` for quiet batch logs.
+
+The NICE Archive CLI serializes `nice-archive scenario` startup with a file
+lock because concurrent scenario-mode VM labs can block each other. The
+orchestrator sets `NICE_ARCHIVE_SCENARIO_LOCK=<results-root>/.scenario.lock`
+for each OpenCode worker so all worker worktrees share the same lock.
+`nice-archive test` is not locked and can still run in parallel.
 
 ## 1. Prepare the CVE list
 
@@ -100,7 +107,8 @@ workflow.
 
 Default result artifacts are written under `cves/llm-experiment-results/`.
 Per-CVE worktrees are detached at `--base-ref`, so the orchestrator does not
-create experiment branches.
+create experiment branches. By default, finished non-interrupted CVE worktrees
+are snapshotted into their result directory and then removed.
 
 ```text
 nice-archive/
@@ -114,11 +122,15 @@ nice-archive/
         │   ├── state.json
         │   ├── readme-handoff.json
         │   ├── readme-handoff.md
+        │   ├── worktree-snapshot/
+        │   │   ├── snapshot-manifest.json
+        │   │   └── cves/cve-2023-50268-example/...
         │   └── attempt-01/
         │       ├── result.json
         │       ├── opencode-output.jsonl
         │       ├── opencode-stderr.log
         │       └── opencode-env.json
+        ├── .scenario.lock
         └── ...
 
 ../nice-archive.cve-worktrees/
@@ -134,7 +146,8 @@ cve,status,attempts,wall_time_seconds,opencode_input_tokens,
 opencode_output_tokens,opencode_reasoning_tokens,
 opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
 opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
-orchestrator_phase,orchestrator_summary,orchestrator_last_error,worktree_ref,...
+orchestrator_phase,orchestrator_summary,orchestrator_last_error,
+worktree_cleanup_policy,worktree_removed,worktree_snapshot,worktree_ref,...
 ```
 
 Each CVE directory also contains a README handoff pair:
@@ -143,6 +156,20 @@ Each CVE directory also contains a README handoff pair:
   summary, agent result, and artifact paths for a later README-update LLM.
 - `readme-handoff.md`: the same information in a compact human-readable form,
   including an instruction to avoid inventing missing metadata.
+
+`attempt-XX/opencode-env.json` records the worker environment summary,
+including the scenario lock path used for that attempt.
+
+Worktree cleanup policy is controlled by `--cleanup-worktrees`:
+
+- `finished` (default): snapshot and remove completed non-interrupted CVEs.
+- `success`: cleanup only successful CVEs.
+- `always`: cleanup even interrupted CVEs.
+- `never`: keep all per-CVE worktrees for debugging.
+
+Cleanup is refused when `--results` and `--worktree-root` are the same
+directory, because removing a worktree would also risk deleting the result
+artifacts. Keep these roots separate for normal batch runs.
 
 ## 5. Success/failure contract
 

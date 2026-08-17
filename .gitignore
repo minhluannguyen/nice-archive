@@ -13,4 +13,5 @@ target
 
 *.log
 
-cves/llm-experiment-results*/
+cves/llm-experiment/
+.nice-archive-scenario.lock
