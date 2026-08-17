@@ -208,6 +208,14 @@ server.succeed("journalctl -u <unit> --no-pager")
 Exit the scenario with `Ctrl+D` in the scenario terminal and choose to kill the
 VMs.
 
+The CLI takes an exclusive file lock before starting a scenario and releases it
+when the scenario exits. By default the lock is
+`.nice-archive-scenario.lock` in the repository checkout. Override it with
+`NICE_ARCHIVE_SCENARIO_LOCK=/path/to/lock` when multiple processes use
+different working directories, or set `NICE_ARCHIVE_SCENARIO_LOCK=none` to
+disable it. This serializes scenario-mode VM labs across parallel agents. It
+does not affect `nice-archive test`, standalone VMs, or other commands.
+
 Note: the `test` and `scenario` commands run `git add <case-dir>` before
 invoking flake outputs so that newly created files are visible to Nix's
 Git-backed flake evaluation. Review `git status` before committing.
@@ -287,6 +295,8 @@ orchestrate scenario and test helpers: a scenario subagent keeps
 `nice-archive scenario` running, VM-operator subagents SSH into the printed VM
 commands to run bounded guest-side exploit steps, and test-runner subagents run
 long automated tests while the main agent monitors for stuck execution.
+Concurrent scenario commands wait on the scenario lock; this is expected and
+prevents scenario-mode VM labs from blocking each other. Tests remain parallel.
 
 Shell detection and isolation are hard gates: agents must not run compound
 shell syntax before identifying the command interpreter, and must never execute

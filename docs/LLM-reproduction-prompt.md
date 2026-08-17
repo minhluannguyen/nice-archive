@@ -142,6 +142,10 @@ Use this pattern when practical:
    capture the printed SSH commands, keep the scenario alive, and report
    readiness and new output. It must not run the exploit unless explicitly
    instructed. Launch it with the 45-minute process-level deadline.
+   Scenario startup is serialized by the NICE Archive CLI. Waiting for or
+   acquiring this lock is expected output, not a stuck scenario by itself.
+   Automated nice-archive test runs are not serialized by this lock and may
+   still run in parallel.
 2. Spawn one or more VM-operator subagents to SSH into the printed VM commands.
    They should perform bounded guest-side health checks, run the exploit or
    trigger inside the VM, collect logs and oracle evidence, and report exact
@@ -267,6 +271,14 @@ NICE Archive command arguments. Use direct nix build, nix run, or nix eval only
 when the CLI has no suitable operation or when diagnosing a CLI/generated
 output failure. Record why direct Nix was necessary and perform final
 vulnerable/fixed validation through nice-archive test.
+
+nice-archive scenario takes an exclusive file lock before starting VMs and
+releases it when the scenario exits. By default the lock is
+.nice-archive-scenario.lock in the repository checkout. Override it with
+NICE_ARCHIVE_SCENARIO_LOCK=/path/to/lock when multiple processes use different
+working directories, or set NICE_ARCHIVE_SCENARIO_LOCK=none to disable it. This
+prevents concurrent scenario-mode VM labs from blocking each other. The lock
+does not apply to nice-archive test, vm, or other commands.
 
 Choose a minimum realistic VM topology. Preserve every service, network,
 privilege, and trust boundary required by the vulnerability without adding

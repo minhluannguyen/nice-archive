@@ -10,6 +10,9 @@ import json
 import re
 import argparse
 import shlex
+import os
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 import time
 import pexpect
@@ -63,6 +66,42 @@ LOG_LIVE = "live"
 LOG_FILE = "file"
 LOG_NONE = "none"
 LOG_MODES = {LOG_LIVE, LOG_FILE, LOG_NONE}
+SCENARIO_LOCK_ENV = "NICE_ARCHIVE_SCENARIO_LOCK"
+DEFAULT_SCENARIO_LOCK_PATH = USER_DIR / ".nice-archive-scenario.lock"
+DISABLED_SCENARIO_LOCK_VALUES = {"", "0", "false", "off", "none", "disabled"}
+
+def resolve_scenario_lock_path() -> Path | None:
+    lock_value = os.environ.get(SCENARIO_LOCK_ENV)
+    if lock_value is not None:
+        if lock_value.strip().casefold() in DISABLED_SCENARIO_LOCK_VALUES:
+            return None
+        lock_path = Path(lock_value).expanduser()
+    else:
+        lock_path = DEFAULT_SCENARIO_LOCK_PATH
+
+    if not lock_path.is_absolute():
+        lock_path = USER_DIR / lock_path
+    return lock_path
+
+@contextmanager
+def scenario_lock():
+    """Serialize interactive scenarios with a repo-local lock by default."""
+    lock_path = resolve_scenario_lock_path()
+    if lock_path is None:
+        yield
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        info(f"Waiting for scenario lock: {lock_path}")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        info(f"Acquired scenario lock: {lock_path}")
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            info(f"Released scenario lock: {lock_path}")
 
 def wait_for_enter():
     """Pause when returning to the interactive menu."""
@@ -503,6 +542,20 @@ def read_until_clean(child, needle: str, timeout: float = 120.0) -> str:
 
 # Start interactive scenario section
 def start_scenario_case(
+    case_dir: Path,
+    isVulnerable: bool = True,
+    system: str = systemStr,
+    popup: bool = True,
+) -> bool:
+    with scenario_lock():
+        return start_scenario_case_unlocked(
+            case_dir,
+            isVulnerable=isVulnerable,
+            system=system,
+            popup=popup,
+        )
+
+def start_scenario_case_unlocked(
     case_dir: Path,
     isVulnerable: bool = True,
     system: str = systemStr,
