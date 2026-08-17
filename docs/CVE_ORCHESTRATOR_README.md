@@ -12,6 +12,8 @@ For every attempt it records:
 - wall-clock execution time
 - OpenCode exit code / timeout state
 - agent-declared reproduction result (`success`, `failure`, or `inconclusive`)
+- orchestrator-generated fallback summary from logs and worktree state, even
+  when the agent omits or corrupts `EXPERIMENT_RESULT.json`
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
@@ -131,13 +133,14 @@ nice-archive/
 cve,status,attempts,wall_time_seconds,opencode_input_tokens,
 opencode_output_tokens,opencode_reasoning_tokens,
 opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
-opencode_cost,openrouter_reasoning_tokens,openrouter_cost,worktree_ref,...
+opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
+orchestrator_phase,orchestrator_summary,orchestrator_last_error,worktree_ref,...
 ```
 
 Each CVE directory also contains a README handoff pair:
 
-- `readme-handoff.json`: machine-readable state, metadata, agent result, and
-  artifact paths for a later README-update LLM.
+- `readme-handoff.json`: machine-readable state, metadata, orchestrator
+  summary, agent result, and artifact paths for a later README-update LLM.
 - `readme-handoff.md`: the same information in a compact human-readable form,
   including an instruction to avoid inventing missing metadata.
 
@@ -170,6 +173,13 @@ An OpenCode process exiting with code 0 is not automatically treated as a
 successful CVE reproduction. The agent must explicitly report `success` in this
 file. If the file is absent or malformed, the run is `inconclusive`.
 
+Regardless of status, the orchestrator writes an `orchestrator_summary` into
+`attempt-XX/result.json`, the final per-CVE `state.json`, `readme-handoff.json`,
+`readme-handoff.md`, and `summary.csv`. This summary is derived from OpenCode
+JSONL/stderr logs and Git worktree changes. It is meant for triage and README
+handoff; it does not replace the case oracle or the agent's
+`EXPERIMENT_RESULT.json`.
+
 ## 6. Resume
 
 ```bash
@@ -179,9 +189,29 @@ cve-orchestrator cves.txt \
   --resume
 ```
 
-Successful CVEs are skipped. Failed/inconclusive CVEs are run again. Worktrees
-are deliberately kept so you can inspect failed runs and so a retry can build on
-the previous attempt.
+By default, `--resume` uses `--resume-mode success-only`: successful CVEs are
+skipped and failed/inconclusive/timeout cases are run again.
+
+For overnight batches where you do not want old failed cases rebuilt:
+
+```bash
+cve-orchestrator cves.txt \
+  --repo /path/to/repo \
+  --workers 3 \
+  --resume \
+  --resume-mode terminal
+```
+
+Resume modes:
+
+- `success-only`: skip only `status=success`.
+- `terminal`: skip `success`, `failure`, `inconclusive`, `timeout`,
+  `opencode_error`, `orchestrator_error`, and `interrupted`.
+- `existing`: skip any CVE that already has a `state.json`, even if the state
+  cannot be parsed.
+
+Worktrees are deliberately kept so you can inspect failed runs and so a retry
+can build on the previous attempt when the resume policy allows it.
 
 ## 7. Live output
 
