@@ -54,16 +54,40 @@ Inside `nix develop`, use the packaged binary directly. Outside the dev shell,
 prefix commands with `nix run .#cve-orchestrator --`.
 
 The flake includes Nixpkgs' `opencode` package, which provides the `opencode`
-binary used by default.
+binary used by default. The orchestrator loads simple `KEY=VALUE` entries from
+the repository `.env` and passes that environment to `opencode run`, so provider
+API keys can be stored there.
 
-Set the OpenRouter key in the shell or repository `.env`:
+Example `.env` entries:
 
 ```bash
-export OPENROUTER_API_KEY='sk-or-v1-...'
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Optional default model used when --model is omitted.
+OPENCODE_MODEL=openai/<model-name>
+# or:
+OPENCODE_MODEL=anthropic/<model-name>
+# or:
+OPENCODE_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
 ```
 
-OpenCode also reads `.env` itself. The orchestrator loads simple `KEY=VALUE`
-entries from the repository `.env` for its own metadata and key checks.
+Use `--model` to override `OPENCODE_MODEL` for a run:
+
+```bash
+cve-orchestrator cves.txt --model openai/<model-name>
+cve-orchestrator cves.txt --model anthropic/<model-name>
+cve-orchestrator cves.txt --model openrouter/deepseek/deepseek-v4-flash-0731
+```
+
+Provider and model names must be supported by the installed OpenCode version.
+Check a provider directly before a long batch:
+
+```bash
+nix develop -c opencode run --format json --model openai/<model-name> "Say ok"
+nix develop -c opencode run --format json --model anthropic/<model-name> "Say ok"
+```
 
 ## 3. DeepSeek V4 Flash 0731 through OpenRouter
 
