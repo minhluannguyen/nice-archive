@@ -1,0 +1,12 @@
+usage: cve-orchestrator [-h] [--repo REPO] [--base-ref BASE_REF]
+                        [--worktree-root WORKTREE_ROOT] [--results RESULTS]
+                        [--workers WORKERS]
+                        [--timeout-minutes TIMEOUT_MINUTES]
+                        [--retries RETRIES] [--opencode-bin OPENCODE_BIN]
+                        [--model MODEL] [--agent AGENT]
+                        [--effort {low,medium,high,xhigh,max}]
+                        [--prompt-file PROMPT_FILE] [--metadata-probe]
+                        [--resume] [--no-auto] [--openrouter]
+                        [--ask-openrouter-key] [--live | --no-live]
+                        [cves]
+cve-orchestrator: error: unrecognized arguments: --resume-mode any-terminal
