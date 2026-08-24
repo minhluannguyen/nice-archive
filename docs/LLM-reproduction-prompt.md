@@ -195,6 +195,8 @@ history.
 Determine and document:
 
 - affected software and versions;
+- the selected vulnerable version and why it is a practical member of the
+  affected range;
 - fixed version or commit;
 - root cause and vulnerability class;
 - required configuration and runtime preconditions;
@@ -259,10 +261,44 @@ Create or complete:
 
 cves/cve-yyyy-nnnn-short-name/
 
-Follow existing case style. Prefer historical nixpkgs packages found with
-nix-versions over source builds. Usually use nice-archive-lib.testsGenerator;
-use another generator only when the documentation or target environment
-requires it.
+Follow existing case style. The vulnerable target may use any version proven
+to be affected; it does not need to be the last affected release. Among valid
+affected versions, prefer one already available from a historical nixpkgs
+revision. Do not build a boundary release from source merely because it is the
+newest affected version.
+
+Never copy, transcribe, extract, vendor, or reconstruct any part of the
+affected software, library, or package source tree into the case. Do not check
+in target source snapshots, individual upstream source files, copied
+functions, or reduced local reimplementations of the vulnerable behavior.
+Obtain the target only by selecting it from an immutable nixpkgs revision or,
+after the pinning strategies below are exhausted, by making Nix fetch and build
+a complete, hash-verified source release, tag, or commit from the original
+upstream project. Normal Nix unpacking during the sandboxed build is allowed.
+Case-owned VM configuration, wrappers, tests, and exploit/trigger code are not
+affected by this target-source rule. Fetch required upstream or nixpkgs target
+patches by immutable URL and verified hash instead of copying their source
+hunks into the case.
+
+Use this packaging order:
+
+1. Use historical nixpkgs package pins with variant = "package" so only the
+   target package changes.
+2. If package pinning cannot represent the required dependency set or system
+   component, pin the whole target VM with variant = "system".
+3. If whole-system pinning cannot provide the required old kernel or old NixOS
+   environment while retaining the modern driver, use
+   nice-archive-lib.oldKernelTestsGenerator, or oldKernelNixosTest only when
+   its lower-level behavior is required.
+4. Only if no suitable vulnerable or fixed package is obtainable from nixpkgs
+   through the applicable strategies above, define or override a Nix package
+   that fetches and builds the complete original upstream source.
+
+Verify that the chosen vulnerable version is inside the authoritative affected
+range, that each selected package evaluates to the intended version, and that
+every source URL, revision, and hash is immutable and checked. Usually use
+nice-archive-lib.testsGenerator; use another generator only when the
+documentation or target environment requires it.
 
 Use the NICE Archive CLI whenever it supports the operation. Use it for case
 discovery, flake updates, scenarios, standalone VMs, and vulnerable/fixed
@@ -354,6 +390,12 @@ applies. If none applies, use a deterministic direct assertion and explain why
 in the case README.
 
 Validation
+
+Before starting the final tests, verify that the selected vulnerable version is
+authoritatively affected, that the package/system/old-kernel escalation order
+was followed wherever applicable, and that the case contains no copied,
+extracted, or reconstructed affected-product source. A source-build fallback
+must fetch complete hash-verified original upstream source through Nix.
 
 Run both variants through the NICE Archive CLI:
 
