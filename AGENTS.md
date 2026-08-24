@@ -331,6 +331,8 @@ Consult and reconcile, where available:
 Determine and document:
 
 - affected software and exact affected version range;
+- the selected vulnerable version and why it is a practical member of that
+  affected range;
 - fixed version or commit;
 - vulnerability class and root cause;
 - configuration and runtime prerequisites;
@@ -349,21 +351,52 @@ Use `nix-versions`, nixpkgs history, and existing case patterns before deciding
 to build vulnerable software from source. Prefer historical nixpkgs packages
 when they provide the required versions.
 
+The vulnerable case does not need to use the last affected release. It may use
+any version that authoritative evidence places inside the affected range.
+Among suitable affected versions, prefer one already packaged by nixpkgs and
+compatible with the narrowest package-level pin. Do not build a particular
+boundary release from source merely because it is the newest affected version.
+
+Do not copy, transcribe, extract, vendor, or reconstruct any part of the
+affected software, library, or package source tree into the case. In
+particular, do not check in target source snapshots, individual upstream source
+files, copied functions, or reduced local reimplementations of the vulnerable
+code. Obtain the target in one of these reproducible ways:
+
+- select it from an immutable nixpkgs revision; or
+- when no suitable nixpkgs package can be used after following the priority
+  order below, have Nix fetch a complete, hash-verified source release, tag, or
+  commit from the original upstream project and build it in the Nix sandbox.
+
+Normal Nix unpacking of a fetched upstream source is permitted. This rule does
+not prohibit case-owned VM configuration, wrappers, tests, or exploit/trigger
+code that is not part of the affected product. Fetch any required upstream or
+nixpkgs target patch by immutable URL with a verified hash instead of copying
+its source hunks into the case.
+
 Use this priority order unless the target requires a documented exception:
 
 1. Select existing vulnerable and fixed user-space packages from historical
-   nixpkgs revisions.
-2. Use a package override for a small source or version adjustment.
-3. Use `variant = "system"` or an old-kernel generator for system components,
-   kernels, distribution services, or tightly coupled dependency sets.
-4. Build from source only after nixpkgs history cannot provide a suitable
-   package.
+   nixpkgs revisions and use `variant = "package"` so only the target package
+   changes.
+2. If package-level pinning cannot represent the required dependencies or
+   system component, pin the whole target VM with `variant = "system"`.
+3. If whole-system pinning still cannot represent the required old kernel or
+   old NixOS environment while retaining the modern test driver, use
+   `oldKernelTestsGenerator` (or `oldKernelNixosTest` only when its lower-level
+   behavior is required).
+4. Only when no suitable vulnerable or fixed package can be obtained from
+   nixpkgs through the applicable strategies above, define or override a Nix
+   package that fetches and builds the complete original upstream source.
 
 For every vulnerable and fixed pin:
 
+- prove the selected vulnerable version falls within the authoritative
+  affected range; it need not be the last affected version;
 - prove the selected package evaluates to the intended version;
 - use full immutable revisions in final source URLs when practical;
 - verify source hashes rather than copying unexplained values;
+- ensure the case contains no copied or extracted affected-product source;
 - keep package selection near the VM that needs it for package variants;
 - keep helper machines invariant unless they genuinely require another pin;
 - make vulnerable and fixed environments differ only where necessary.
@@ -651,6 +684,14 @@ The task is complete only when all applicable items are true:
 
 - the case is discoverable through the NICE Archive CLI;
 - package versions and pins are independently verified;
+- the chosen vulnerable version is authoritatively confirmed as affected,
+  without requiring it to be the last affected version;
+- package pinning was preferred over whole-system pinning, and whole-system
+  pinning over old-kernel support, wherever each earlier strategy could
+  faithfully represent the target;
+- no affected-product source files, functions, snippets, or reduced
+  reimplementations are stored in the case; any source-build fallback fetches
+  complete hash-verified original upstream source through Nix;
 - manual vulnerable behavior was observed in an isolated VM;
 - manual fixed behavior was observed using the same trigger;
 - vulnerable and fixed automated tests both ran and passed;

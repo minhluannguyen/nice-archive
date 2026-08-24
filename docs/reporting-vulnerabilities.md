@@ -368,9 +368,29 @@ See the multiverse [Nix API](https://github.com/fzakaria/nixpkgs-multiverse/blob
 and [`mvs` CLI](https://github.com/fzakaria/nixpkgs-multiverse/blob/main/docs/cli.md),
 or run `nix-versions --help` for fallback usage.
 
+The vulnerable package can be any version that authoritative evidence confirms
+is affected; it does not have to be the last affected release. When several
+affected versions are viable, select one already present in nixpkgs and
+compatible with package-level pinning. Do not build a specific boundary release
+from source merely because it is the newest affected version.
+
+Never copy, transcribe, extract, vendor, or reconstruct affected-product source
+into the case directory. This includes full source snapshots, individual
+upstream source files, copied functions, and reduced local reimplementations of
+the vulnerable code. Obtain the target from an immutable nixpkgs revision or
+make Nix fetch a complete, hash-verified release, tag, or commit from the
+original upstream project and build it in the sandbox. Nix may unpack that
+fetched source during the build. Case-owned Nix expressions, VM configuration,
+wrappers, tests, and exploit/trigger code remain appropriate. Fetch any needed
+upstream or nixpkgs target patch by immutable URL and verified hash rather than
+copying its source hunks into the case.
+
 Use this priority order:
-1. Prioritize existing nixpkgs packages at historical nixpkgs revisions unless the package is a system-level component, distribution service, kernel, or tightly coupled dependency set.
-2. For normal user-space packages, fetch or select the historical package inside the VM configuration, for example:
+
+1. Use existing vulnerable and fixed packages from historical nixpkgs
+   revisions with `variant = "package"`. Keep the surrounding NixOS system on
+   the current pin and select the historical package inside the target VM
+   configuration, for example:
 
 ```nix
 let 
@@ -397,12 +417,24 @@ in
   ];
 }
 ```
-The commit hashes fetched from `nix-versions` can be used to update the `url` line in the code above. The hashes (sha256) can be calculated with `nix-prefetch-url <url> --unpack` or leave it empty and then `nix build/nix run` will fail with the correct hash, use it to update the hash in the code. See [Heartbleed](../cves/cve-2014-0160-heartbleed/) for a working example.
+The commit hashes found through nixpkgs history can be used to update the `url`
+line in the example. Calculate the archive hash with
+`nix-prefetch-url <url> --unpack`; alternatively, use the expected hash printed
+by a failed Nix build and then rerun with the verified value. See
+[Heartbleed](../cves/cve-2014-0160-heartbleed/) for a working example.
 
-3. If the vulnerable component is a system-level component, distribution service, kernel, or tightly coupled dependency set, use `variant = "system"`
-   or an old-kernel generator. See [chwoot](../cves/cve-2025-32463-chwoot/) for a working example.
-4. Use `overrideAttrs` when nixpkgs has the package but needs a small source or version adjustment.
-5. Build from source only after nixpkgs history does not provide a suitable package/version. See [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/) for a working example of building from source.
+2. If package-level pinning cannot represent a system component or its tightly
+   coupled dependencies, pin the whole target VM with `variant = "system"`.
+   See [chwoot](../cves/cve-2025-32463-chwoot/) for a working example.
+3. If whole-system pinning cannot provide the necessary old kernel or old NixOS
+   environment while retaining a modern test driver, use
+   `oldKernelTestsGenerator`. Use `oldKernelNixosTest` only for required custom
+   low-level behavior.
+4. Only if no suitable vulnerable or fixed package is available through the
+   applicable nixpkgs strategies above, define a package or use `overrideAttrs`
+   to fetch and build the complete original upstream source. See
+   [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/) for a
+   source-build example.
 
 Keep package-selection logic close to the VM that needs it. Avoid moving
 user-space package selection into the top-level `flake.nix` unless the whole
@@ -1298,6 +1330,14 @@ Before considering the report done:
 - [ ] `test.py` ends with framework assertion blocks where helpers fit.
 - [ ] nixpkgs history was checked before building vulnerable software from source.
 - [ ] Existing nixpkgs packages are used when suitable versions exist.
+- [ ] The chosen vulnerable version is proven affected; it is not required to
+      be the last affected version.
+- [ ] Package pinning was preferred over whole-system pinning, and
+      whole-system pinning was preferred over old-kernel support when each
+      earlier option could faithfully represent the target.
+- [ ] No affected-product source files, functions, snippets, or reduced
+      reimplementations are stored in the case; source-build fallbacks fetch
+      complete hash-verified original upstream source through Nix.
 - [ ] Exploit provenance is documented.
 - [ ] Existing PoC or regression-test material was reused or adapted when
       available; any derived trigger cites its authoritative basis.
