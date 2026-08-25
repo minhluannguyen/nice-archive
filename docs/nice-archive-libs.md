@@ -541,7 +541,8 @@ Use existing cases as models:
 | File write, overwrite, deletion, or preservation | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
 | Information disclosure | `check_file_contains`, optionally `check_file_size_equals` | Heartbleed, GitLab secret snippet |
 | Service crash or fatal signal | `check_core_dump_exists`, `check_service_log_contains` | sysstat double free, TensorFlow FPE, curl SASL crash |
-| Log or request exfiltration | `check_service_log_contains`, `check_file_contains` | Tomcat SSI XSS, Early CCS MITM |
+| Log or request exfiltration | `check_service_log_contains`, `check_file_contains` | Early CCS MITM |
+| Browser-executed XSS | Drive a real browser programmatically in headless/non-graphical mode unless visible UI behavior is required; then assert a browser-caused effect with `check_service_log_contains`, `check_file_contains`, or, for genuinely graphical cases, `check_screen_text` | Bleach mutation XSS, Tomcat SSI XSS |
 | Graphical/UI proof | `check_screen_text` | LibreOffice graphical RCE |
 | Timing side channel or delay proof | `check_exact_execution_time` | WordPress SQLi timing-style test |
 

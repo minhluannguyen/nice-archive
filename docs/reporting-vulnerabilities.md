@@ -24,15 +24,32 @@ The expected output is a directory under [`cves/`](../cves/) with:
 ```text
 cves/cve-yyyy-nnnn-short-name/
 ├── flake.nix
+├── default.nix              # only when required by the selected workflow
+├── README.md
 ├── test.py
 ├── vm-server.nix
 ├── vm-attacker.nix
 ├── exploit/
-└── readme.md
+│   ├── attacker/
+│   └── server/
+├── package/                 # only for complex packaging expressions
+└── flake.lock
 ```
 
 Some reports may need fewer files, and graphical or old-kernel reports may
-need more.
+need more. Keep primary entry points, the case README, `test.py`, and VM
+configuration files in the case root. `default.nix` is optional for modern
+flake-backed cases. Preserve an existing legacy `readme.md` filename when
+completing a case unless a rename is explicitly in scope.
+
+Put every exploit script, payload, helper service, malformed fixture, and
+other trigger artifact below `exploit/<role>/`, where `<role>` is the VM or
+execution environment that consumes it, such as `attacker`, `server`, or
+`client`. Use `exploit/shared/` only for artifacts genuinely consumed by
+several roles. If target packaging needs a large or multi-file expression,
+place packaging-only files under `package/` or `package/<target>/` and import
+them from the root entry point. The `package/` directory must not contain
+copied affected-product source. Do not create empty placeholder directories.
 
 ## Agent-friendly workflow
 
@@ -81,8 +98,8 @@ requirements:
   triggers in the coding-agent session or directly on the host.
 - Establish and state a suitable VM or container boundary before running a
   trigger. Do not fall back to host execution if isolation fails.
-- Follow existing case style before inventing a new structure. Heartbleed is a
-  good model for historical user-space packages.
+- Follow the documented case layout. Existing cases can demonstrate APIs and
+  packaging patterns, but legacy layouts are not authoritative for new cases.
 - Use the scenario helper plus SSH for manual validation when possible.
 - When the subagent capability gate passes, use a scenario subagent to keep
   scenario mode running and VM-operator subagents to SSH into generated VMs and
@@ -299,32 +316,33 @@ changed:
 - upstream patch or commit, if known;
 - exploit source URL, if copied or adapted;
 - whether the exploit was copied, modified, simplified, rewritten in place, or
-  used as the basis for a new recipe-local `exploit/<helper>`;
+  used as the basis for a new recipe-local `exploit/<role>/<helper>`;
 - why any changes were needed for the NixOS VM environment; and
 - any safety limits added for automated testing.
 
 This information belongs in the CVE README, not only in code comments.
 
-Keep final exploit code under the case's `exploit/` directory. Reuse a supplied
-or public PoC whenever one is available. It is fine to modify, simplify, wrap,
-or rewrite that PoC when the original does not fit the VM environment or test
-oracle, provided the source and changes are documented.
+Keep final exploit code under the machine- or environment-specific
+`exploit/<role>/` directory. Reuse a supplied or public PoC whenever one is
+available. It is fine to modify, simplify, wrap, or rewrite that PoC when the
+original does not fit the VM environment or test oracle, provided the source
+and changes are documented.
 
 If no suitable PoC is available, derive a minimal trigger directly from the
 CVE description, upstream advisory, fixing patch, or regression test. Do not
 invent a new exploit technique or write an unrelated PoC from scratch. Record
 the authoritative artifact from which the local helper was derived and make VM
 modules reference the final recipe-local path, such as
-`./exploit/trigger.py`.
+`./exploit/attacker/trigger.py`.
 
 The exploit source code should only handle practical or realistic inputs. Branching for tests should be avoided; test logic belongs in `test.py` instead. For example, if the exploit is expected to crash or fail on a fixed version, the exploit should not catch the crash and print "failed" or "success"; that must be handled by the test script.
 
 Keep exploit workflows easy to inspect. When the exploit steps are small enough
 to resemble what a human would run manually, prefer small single-purpose
-helpers under `exploit/`, or simple commands directly in `test.py`, over one
-large "do everything" script. Use a larger script when the task is genuinely
-heavy, such as authentication request/response flows, input processing,
-protocol setup, or other complex mechanics.
+helpers under `exploit/<role>/`, or simple commands directly in `test.py`, over
+one large "do everything" script. Use a larger script when the task is
+genuinely heavy, such as authentication request/response flows, input
+processing, protocol setup, or other complex mechanics.
 
 The README manual reproduction should mirror the same human-readable sequence.
 `test.py` should orchestrate the sequence and own vulnerable/fixed expectations
@@ -712,7 +730,7 @@ patterns:
 
 let
   app = pkgs.writeShellScriptBin "vulnerable-service" ''
-    exec ${pkgs.python3}/bin/python3 ${./exploit/server.py} --port ${toString listenPort}
+    exec ${pkgs.python3}/bin/python3 ${./exploit/server/server.py} --port ${toString listenPort}
   '';
 in
 {
@@ -739,7 +757,7 @@ in
 let
   exploit = pkgs.runCommand "exploit-files" {} ''
     mkdir -p "$out"
-    cp -r ${./exploit} "$out/exploit"
+    cp -r ${./exploit/attacker} "$out/exploit"
   '';
 in
 {
@@ -753,7 +771,8 @@ in
 
 #### Important notes:
 
-- Keep the exploit code under `./exploit/` in the case directory.
+- Keep exploit artifacts under the appropriate `./exploit/<role>/`
+  subdirectory in the case directory.
 - If PoC code is copied or adapted, reference the original source using comments and the recipe README.
 - Note that the file path system of NixOS is not the same as a conventional Linux FHS. Packages are installed in the Nix store, and `/bin`, `/usr/bin`, and `/usr/local/bin` may not exist or may not contain the expected binaries. If these binaries are installed, there will be symlinks to the Nix store paths from `/run/current-system/sw/bin/`. So if you need to run a binary from a package, use the Nix store path or the symlink in `/run/current-system/sw/bin/` instead of assuming it is in `/bin` or `/usr/bin`. See [CVE-2020-7247](../cves/cve-2020-7247-opensmtpd/exploit) for an example of a case that uses the symlink path to run a binary (`touch`).
 
@@ -770,13 +789,16 @@ import assertion_blocks as ab
 
 start_all()
 
-server.wait_for_unit("multi-user.target")
-server.wait_for_unit("vulnerable-service.service")
-server.wait_for_open_port(8080)
+# Wait for the target service; the trigger requires a reachable server.
+server.wait_for_unit("multi-user.target", timeout=120)
+server.wait_for_unit("vulnerable-service.service", timeout=120)
+server.wait_for_open_port(8080, timeout=60)
 
-attacker.wait_for_unit("multi-user.target")
-attacker.succeed("timeout 30s run-exploit http://server:8080")
+# Run the same bounded trigger in both variants and collect its evidence.
+attacker.wait_for_unit("multi-user.target", timeout=120)
+attacker.succeed("run-exploit http://server:8080", timeout=30)
 
+# Expect the target-unique marker only when the vulnerable effect occurred.
 ab.check_file_contains(attacker, "/tmp/result.txt", "Pwned!")
 ```
 
@@ -797,6 +819,31 @@ framework's assertion blocks for that oracle:
 - model new tests on existing cases such as Heartbleed, curl-ws-loop, zgrep
   file write, Dirty COW, chwoot, LibreOffice, and GitLab email reset.
 
+Keep the test sequence straightforward and mostly linear so it also serves as
+a manual reproduction outline. Add concise comments before meaningful phases
+such as readiness, trigger execution, evidence collection, and the final
+oracle. Each comment should explain why the phase exists and its expected
+outcome, especially where vulnerable and fixed branches differ. Avoid comments
+that only restate obvious Python syntax and avoid helper abstractions that hide
+the security-relevant sequence.
+
+For XSS, include a browser or victim-browser VM and make a real browser render
+the affected page and execute the payload programmatically. Automate Firefox,
+Chromium, or another appropriate browser with Selenium, WebDriver, Playwright,
+or an equivalent browser-control interface. When the vulnerability does not
+depend on visible UI behavior, run the browser headlessly in a non-graphical VM
+and leave graphical/OCR support disabled. Enable a graphical VM only when the
+security behavior itself requires visible rendering or user interaction.
+
+HTTP-only tools such as `curl`, `wget`, or Python request libraries may set up
+application state and perform health checks, but inspecting their response body
+does not prove script execution. Use a browser-observable oracle—for example, a
+target-unique cookie or token exfiltrated to an attacker VM, a deterministic
+DOM change, or another effect caused by JavaScript—and repeat the identical
+programmatic browser workflow against the fixed variant. Manual browser use may
+supplement scenario debugging, but it does not replace the automated browser
+path in `test.py`.
+
 For example:
 
 ```python
@@ -809,19 +856,21 @@ else:
     ab.check_file_contains(server, f"{workdir}/hacked", "protected original")
 ```
 
-Useful NixOS test-driver methods include:
+Useful NixOS test-driver methods include the following. The
+[official NixOS test-driver reference](https://nixos.org/manual/nixos/stable/#ssec-machine-objects)
+documents their timeout parameters.
 
 | Method | Use |
 | --- | --- |
 | `start_all()` | Boot all machines. |
 | `<vm>.start()` | Boot one machine. |
-| `<vm>.wait_for_unit("name.service")` | Wait for a systemd unit. |
-| `<vm>.wait_for_open_port(port)` | Wait for a listening TCP port. |
-| `<vm>.succeed("command")` | Run a command that must exit 0. |
-| `<vm>.fail("command")` | Run a command that must fail. |
-| `<vm>.execute("command")` | Run a command and inspect `(status, output)`. |
-| `<vm>.wait_until_succeeds("command", timeout)` | Retry until command succeeds. |
-| `<vm>.wait_for_file("/path")` | Wait for a file to appear. |
+| `<vm>.wait_for_unit("name.service", timeout=seconds)` | Wait for a systemd unit with an explicit deadline. |
+| `<vm>.wait_for_open_port(port, timeout=seconds)` | Wait for a listening TCP port with an explicit deadline. |
+| `<vm>.succeed("command", timeout=seconds)` | Run a command that must exit 0 within the deadline. |
+| `<vm>.fail("command", timeout=seconds)` | Run a command that must fail within the deadline. |
+| `<vm>.execute("command", timeout=seconds)` | Run a command within the deadline and inspect `(status, output)`. |
+| `<vm>.wait_until_succeeds("command", timeout=seconds)` | Retry until the command succeeds or the deadline expires. |
+| `<vm>.wait_for_file("/path", timeout=seconds)` | Wait for a file to appear within the deadline. |
 | `<vm>.wait_for_x()` | Wait for X11 in graphical tests. |
 | `<vm>.wait_for_text("text")` | OCR screen text when `enableOCR = true`. |
 | `<vm>.copy_from_host("src", "dst")` | Copy a host file into the VM during a test. |
@@ -839,8 +888,9 @@ ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
 Some important points:
-- The test is also a list of steps for a human to reproduce the exploit manually. Keep the test
-  readable and understandable, don't use overly complex Python constructs.
+
+- The test is also a list of steps for a human to reproduce the exploit
+  manually. Keep it readable and avoid unnecessarily complex Python.
 - The test should handle both vulnerable and fixed variants.
 
 ### Bound waits and blocking triggers
@@ -849,26 +899,34 @@ Every wait, polling loop, network operation, and trigger that may block must
 have a finite deadline. Fixed variants need particular care: an exploit that
 hangs after the fix is not by itself proof that the vulnerability is blocked.
 
-Use explicit test-driver timeouts where supported and wrap potentially hanging
-guest commands with `timeout`:
+Use the NixOS test driver's native timeout parameters. Do not embed the shell
+`timeout` utility in a guest command when the machine method already accepts
+`timeout=`:
 
 ```python
 server.wait_for_unit("vulnerable-service.service", timeout=120)
 server.wait_for_open_port(8080, timeout=60)
 
 status, output = attacker.execute(
-    "timeout --signal=TERM 30s run-exploit http://server:8080"
+    "run-exploit http://server:8080",
+    timeout=30,
 )
 assert status != 124, f"exploit timed out instead of producing a result: {output}"
 ```
 
-Also set connect and read timeouts inside network PoCs. Bound custom retry loops
-by elapsed time or attempt count. VM and service readiness must fail after five
+The same `timeout=` convention applies to `succeed`, `fail`, polling helpers,
+and wait helpers. Also set connect and read timeouts inside network PoCs. Use a
+shell-level timeout only below the test-driver API or when no native timeout
+parameter exists, and document that exception. Bound custom retry loops by
+elapsed time or attempt count. VM and service readiness must fail after five
 minutes. Complete CLI-driven NixOS tests, including initial downloads and
 builds, must fail after 30 minutes. Interactive scenarios must terminate after
-45 minutes. The two-minute polling and five-minute inactivity cutoff still
-apply and may terminate an operation earlier. On timeout, collect diagnostics
-and fail clearly; never count a timeout alone as a passing fixed result.
+45 minutes. Host-side shell `timeout` around the complete `nice-archive`
+command remains the process watchdog; it is distinct from guest-command
+timeouts in `test.py`. The two-minute polling and five-minute inactivity cutoff
+still apply and may terminate an operation earlier. On timeout, collect
+diagnostics and fail clearly; never count a timeout alone as a passing fixed
+result.
 
 ## 8. Add standalone VMs when useful
 
@@ -1327,6 +1385,18 @@ Before considering the report done:
 - [ ] Simple exploit workflows are split into clear helper commands or
       `test.py` steps; complex scripts are used only where they make the
       exploit mechanics clearer.
+- [ ] The case root contains primary orchestration files, exploit artifacts
+      are grouped below `exploit/<role>/`, and complex packaging-only files are
+      grouped below `package/` without copied affected-product source.
+- [ ] `test.py` is straightforward and its concise phase comments explain each
+      meaningful step's purpose and expected outcome.
+- [ ] Guest commands and waits use native NixOS test-driver `timeout=`
+      arguments instead of embedding the shell `timeout` utility when the
+      method supports a timeout parameter.
+- [ ] XSS cases drive a real browser programmatically for the trigger and
+      oracle; they use headless mode and a non-graphical VM unless visible UI
+      behavior is a security-relevant precondition. HTTP-only tools are limited
+      to setup and health checks.
 - [ ] `test.py` ends with framework assertion blocks where helpers fit.
 - [ ] nixpkgs history was checked before building vulnerable software from source.
 - [ ] Existing nixpkgs packages are used when suitable versions exist.

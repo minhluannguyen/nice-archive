@@ -220,12 +220,18 @@ the CVE description, upstream advisory, fixing patch, or regression test. Cite
 the authoritative basis for every trigger step. Do not invent an independent
 exploit technique or write an unrelated PoC from scratch.
 
-Keep final trigger code under the case's exploit/ directory. When exploit
-steps are small, prefer small single-purpose helpers, or simple commands
-directly in test.py, over one large script that hides the process. A larger
-script is fine for complex work such as authentication flows, request/response
-handling, input processing, or protocol setup. Vulnerable and fixed
-expectations and pass/fail decisions belong in test.py.
+Keep every trigger script, payload, helper service, malformed fixture, and
+other exploit artifact under the case's exploit/ directory. Divide it into
+subdirectories named for the VM or environment where each artifact runs, such
+as exploit/attacker/, exploit/server/, or exploit/client/. Use exploit/shared/
+only for artifacts genuinely consumed by several roles. Do not put exploit
+artifacts in the case root.
+
+When exploit steps are small, prefer small single-purpose helpers, or simple
+commands directly in test.py, over one large script that hides the process. A
+larger script is fine for complex work such as authentication flows,
+request/response handling, input processing, or protocol setup. Vulnerable and
+fixed expectations and pass/fail decisions belong in test.py.
 
 Isolation gate
 
@@ -261,11 +267,39 @@ Create or complete:
 
 cves/cve-yyyy-nnnn-short-name/
 
-Follow existing case style. The vulnerable target may use any version proven
-to be affected; it does not need to be the last affected release. Among valid
-affected versions, prefer one already available from a historical nixpkgs
-revision. Do not build a boundary release from source merely because it is the
-newest affected version.
+Organize the case so its root is easy to scan. Keep primary entry points and
+orchestration files there: flake.nix, test.py, README.md, VM configuration
+files, flake.lock, and default.nix when the selected generator or legacy path
+needs it. Preserve an existing legacy readme.md filename when completing a
+case unless renaming it is explicitly in scope.
+
+Use this shape, omitting files and role directories the case does not need:
+
+cves/cve-yyyy-nnnn-short-name/
+  flake.nix
+  default.nix                    # only when required
+  README.md
+  test.py
+  vm-<role>.nix
+  exploit/
+    attacker/
+    server/
+    shared/                      # only for genuinely shared artifacts
+  package/                       # only for complex packaging expressions
+  flake.lock
+
+Put all exploit artifacts below exploit/<role>/ according to where they run.
+If packaging the affected target needs a large or multi-file expression, put
+the packaging-only files below package/ or package/<target>/ and import them
+from the root entry point. Never place copied affected-product source there;
+the package expression must fetch it according to the source policy below.
+Do not create empty placeholder files or directories.
+
+Follow the documented case style. The vulnerable target may use any version
+proven to be affected; it does not need to be the last affected release. Among
+valid affected versions, prefer one already available from a historical
+nixpkgs revision. Do not build a boundary release from source merely because
+it is the newest affected version.
 
 Never copy, transcribe, extract, vendor, or reconstruct any part of the
 affected software, library, or package source tree into the case. Do not check
@@ -345,12 +379,24 @@ Manual validation must happen before finalizing test.py:
 4. Repeat against the fixed variant with the same trigger.
 5. Translate the observed workflow into test.py.
 
+Keep test.py straightforward and linear enough to double as a human-readable
+reproduction outline. Add concise comments at the meaningful phases—target
+readiness, trigger execution, evidence collection, and final oracle—that state
+the purpose of the step and its expected result. Make vulnerable and fixed
+expectations explicit in variant branches. Avoid comments that merely restate
+obvious Python syntax and avoid abstractions that hide the security sequence.
+
 Timeout policy
 
 Give every network request, polling loop, VM wait, and potentially blocking
 trigger an explicit finite timeout. Fixed-variant checks must not wait forever.
-Use bounded guest commands such as timeout, explicit test-driver deadlines, and
-attempt or elapsed-time limits for custom loops.
+Inside test.py, use the NixOS test driver's native timeout parameters: pass
+timeout= to execute, succeed, fail, polling helpers, and wait helpers. Do not
+embed the shell timeout command in guest command strings when the test-driver
+method provides a timeout argument. Keep application-level connect and read
+timeouts inside network clients and PoCs. Use a shell timeout only below the
+test-driver API or when no native timeout parameter exists, and document the
+reason. Bound custom loops by attempts or elapsed time.
 
 The two-minute polling and five-minute inactivity watchdog above applies during
 these operations. A larger hard limit does not override the five-minute
@@ -401,6 +447,10 @@ Run both variants through the NICE Archive CLI:
 
 timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
 timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
+
+These outer shell timeouts are host-side watchdogs for the complete CLI
+process. They do not replace the native timeout= arguments required for guest
+commands and waits inside test.py.
 
 When available, run each long-lived test in a test-runner subagent while the
 main agent monitors progress and applies the stuck-test watchdog. The main
