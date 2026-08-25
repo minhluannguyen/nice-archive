@@ -417,18 +417,44 @@ A typical case contains:
 
 ```text
 flake.nix
+default.nix        # only when required
+README.md
 test.py
 vm-server.nix
 vm-attacker.nix
 exploit/
-readme.md
+  attacker/
+  server/
+package/           # only for complex packaging expressions
 flake.lock
 ```
 
-Adapt the file set and topology to the vulnerability. Common topologies are a
-single target VM, client/server, attacker/server, or a multi-service network.
-Use the smallest topology that faithfully models the real preconditions and
-keeps the trigger isolated.
+Keep the case root easy to scan. Put primary entry points and orchestration
+files there: `flake.nix`, `test.py`, the case `README.md`, VM configuration
+files, and `default.nix` when the selected generator or legacy workflow needs
+it. Preserve an existing legacy `readme.md` filename when completing a case
+unless a rename is explicitly in scope.
+
+Put every exploit-related script, payload, helper service, malformed fixture,
+and other trigger artifact under `exploit/`. Divide that directory by the VM
+or execution environment where each artifact runs, using role names that match
+the topology, such as `exploit/attacker/`, `exploit/server/`, or
+`exploit/client/`. Use `exploit/shared/` only for artifacts genuinely consumed
+by multiple roles. Do not leave exploit artifacts loose in the case root.
+
+Keep a short packaging expression in the case root when it remains easy to
+understand. If packaging the affected software requires a large or multi-file
+expression, place the packaging-only files under `package/` (or
+`package/<target>/` when there are several targets) and import them from the
+root entry point. This directory must not contain copied affected-product
+source; the Nix expression must fetch that source according to the Packaging
+Strategy above.
+
+Adapt the file set and role subdirectories to the vulnerability; do not create
+empty placeholder files or directories. Common topologies are a single target
+VM, client/server, attacker/server, or a multi-service network. Use the
+smallest topology that faithfully models the real preconditions and keeps the
+trigger isolated.
 
 Use a minimum realistic topology:
 
@@ -467,7 +493,8 @@ CVE description, upstream advisory, patch, or regression test. Do not invent a
 new exploit technique or write an unrelated PoC from scratch. Document the
 authoritative artifact from which each trigger step was derived.
 
-Keep final exploit code under the case's `exploit/` directory. Record:
+Keep final exploit code under the machine- or environment-specific
+subdirectory of the case's `exploit/` directory. Record:
 
 - original source and author when available;
 - whether it was copied, adapted, simplified, or rewritten;
@@ -475,11 +502,20 @@ Keep final exploit code under the case's `exploit/` directory. Record:
 - safety limits added for automation.
 
 Exploit workflows should be human-readable. When the steps are small, prefer
-small single-purpose helpers under `exploit/`, or simple commands directly in
-`test.py`, over one large script that hides the whole process. A larger script
-is acceptable for genuinely complex work such as authentication flows,
-request/response handling, input processing, or protocol setup. Variant-specific
-expectations and pass/fail decisions belong in `test.py`, not in exploit code.
+small single-purpose helpers under `exploit/<role>/`, or simple commands
+directly in `test.py`, over one large script that hides the whole process. A
+larger script is acceptable for genuinely complex work such as authentication
+flows, request/response handling, input processing, or protocol setup.
+Variant-specific expectations and pass/fail decisions belong in `test.py`, not
+in exploit code.
+
+Keep `test.py` straightforward and linear enough to serve as the manual
+reproduction outline. Add concise comments at the meaningful phases—target
+readiness, trigger execution, evidence collection, and final oracle—stating
+both why the step exists and the expected result. In variant branches, make
+the vulnerable and fixed expectations explicit. Do not comment obvious Python
+syntax or bury the workflow in abstractions that make the security sequence
+harder to follow.
 
 The oracle must independently prove the security property. Strong examples
 include:
@@ -561,11 +597,14 @@ All waits and potentially blocking triggers must have explicit finite
 deadlines. This is especially important for the fixed variant, where a blocked
 exploit can otherwise wait forever and be mistaken for successful mitigation.
 
-- Give network clients connect and read timeouts.
-- Put a bounded `timeout` around untrusted exploit commands and commands that
-  may hang on the fixed version.
-- Pass explicit timeouts to test-driver polling and wait helpers when the API
-  supports them.
+- In `test.py`, pass explicit native `timeout=` arguments to NixOS test-driver
+  methods such as `execute`, `succeed`, `fail`, polling helpers, and wait
+  helpers. Do not embed the shell `timeout` command in guest command strings
+  when the test-driver method provides a timeout parameter.
+- Keep connect and read timeouts inside network clients and PoCs as a separate
+  application-level bound. Use a shell-level timeout only when operating below
+  the test-driver API or when no native timeout parameter exists, and document
+  why it is necessary.
 - Bound custom loops by elapsed time or attempt count and fail with diagnostic
   output when the limit is reached.
 - Enforce the hard limits defined above even during first-time Nix downloads
@@ -590,6 +629,10 @@ timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnn
 timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
 ```
 
+These shell `timeout` invocations are host-side watchdogs for the complete CLI
+process. They do not replace native NixOS test-driver `timeout=` arguments for
+guest commands and waits in `test.py`.
+
 The `scenario` command takes an exclusive file lock before starting VMs and
 releases it when the scenario exits. By default the lock is
 `.nice-archive-scenario.lock` in the repository checkout. Override it with
@@ -612,8 +655,8 @@ variants have been run, unless an external blocker makes that impossible.
 
 ## Case Documentation
 
-Keep the case `readme.md` compact, self-contained, and source-backed. Existing
-cases may inform implementation, but the README must not name, cite, compare
+Keep the case README compact, self-contained, and source-backed. Existing cases
+may inform implementation, but the README must not name, cite, compare
 itself with, or describe itself as modeled after another CVE case. Explain this
 case directly from its own evidence and authoritative external sources.
 
@@ -699,6 +742,11 @@ The task is complete only when all applicable items are true:
   5/5/30/45-minute hard limits and the two-minute/five-minute watchdog;
 - final scenario and test validation used the NICE Archive CLI;
 - `test.py` checks the security effect with applicable assertion blocks;
+- the case root contains the primary orchestration files, exploit artifacts
+  are grouped below `exploit/<role>/`, and any complex packaging expression is
+  isolated below `package/` without vendored affected-product source;
+- `test.py` presents a straightforward workflow with concise comments that
+  identify each meaningful step's purpose and expected outcome;
 - the oracle relies on target-unique guest markers rather than only generic
   machine behavior;
 - the README records accurate provenance, commands, results, and references;
