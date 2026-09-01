@@ -261,20 +261,22 @@ case.
 
 ## Agent-based CVE reproduction
 
-This repository includes [`AGENTS.md`](./AGENTS.md) as the operating contract
-for coding agents. A request such as `Reproduce CVE-YYYY-NNNN` instructs an
+This repository includes [`AGENTS.md`](./AGENTS.md) as the concise operating
+contract for coding agents; the detailed procedures live in the
+[reporting guide](./docs/reporting-vulnerabilities.md). A request such as
+`Reproduce CVE-YYYY-NNNN` instructs an
 agent to research the vulnerability, create or complete its case under
 `cves/`, reproduce it manually in an isolated VM, and verify both vulnerable
 and fixed variants with a machine-checkable oracle. Additional details or a
 preferred PoC can be supplied in the same request.
 
-The contract also makes the agent identify its command shell before exploration,
-create a dedicated working directory for each CVE, reuse or source a PoC from
-authoritative material, plant target-unique markers for the oracle, bound
-potentially blocking operations, and record model, harness, elapsed time, token
-usage, and cost in the completed case README. Unavailable runtime metadata
-must be labeled rather than estimated, and missing per-run telemetry does not
-block completion.
+The contract also makes the agent identify its command shell before
+exploration, isolate changes to the case directory or assigned worktree, reuse
+or source a PoC from authoritative material, plant target-unique markers for
+the oracle, bound potentially blocking operations, and record model, harness,
+elapsed time, token usage, and cost in the completed case README. Unavailable
+runtime metadata must be labeled rather than estimated, and missing per-run
+telemetry does not block completion.
 
 Generated case READMEs follow a compact required section order and describe
 their own evidence directly. They do not compare themselves with or cite other
@@ -341,8 +343,9 @@ running tests and scenarios.
 
 ### Port conflicts
 
-Some VMs forward host ports. If a port is already in use, edit the relevant
-`vm-*.nix` file and change `virtualisation.forwardPorts`.
+Only standalone VMs may forward host ports; scenario and automated-test VMs
+communicate over their VM network. If a standalone port is already in use,
+edit the relevant `vm-*.nix` file and change `virtualisation.forwardPorts`.
 
 ### GUI or OCR tests fail
 

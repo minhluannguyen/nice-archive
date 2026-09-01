@@ -577,12 +577,12 @@ preserve or reject files.
 
 ```python
 if variant == "vulnerable":
-    ab.check_file_contains(server, f"{workdir}/hacked", "NICE-CVE-WRITE")
-    ab.check_file_exists(server, f"{workdir}/hacked2")
+    ab.check_file_contains(server, "/etc/passwd", "super-secret-flag-injected")
+    ab.check_file_exists(server, "/tmp/cve-xxxx-pwned", is_existing=True)
 else:
     assert variant == "fixed", f"Unknown variant marker: {variant}"
-    ab.check_file_exists(server, f"{workdir}/hacked2", is_existing=False)
-    ab.check_file_contains(server, f"{workdir}/hacked", "protected original")
+    ab.check_file_exists(server, "/tmp/cve-xxxx-pwned", is_existing=False)
+    ab.check_file_contains(server, "/etc/passwd", "protected original")
 ```
 
 ### Information disclosure example

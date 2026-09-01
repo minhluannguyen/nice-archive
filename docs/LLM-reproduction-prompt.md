@@ -1,8 +1,9 @@
 # LLM CVE Reproduction Prompt
 
-The repository-level [`AGENTS.md`](../AGENTS.md) defines the complete agent
-contract. In an agent environment that reads `AGENTS.md`, the minimal request
-is:
+The repository-level [`AGENTS.md`](../AGENTS.md) defines the concise normative
+agent contract, while the [reporting guide](./reporting-vulnerabilities.md)
+contains the detailed procedures. In an agent environment that reads
+`AGENTS.md`, the minimal request is:
 
 ```text
 Reproduce CVE-YYYY-NNNN
@@ -256,10 +257,12 @@ methods, SSH into a generated VM, or container exec into a purpose-built
 container so the execution boundary is explicit.
 
 Host-side work is limited to source review, file edits, safe metadata queries,
-sandboxed builds, and launching or controlling the lab. Never bind a vulnerable
-service to a host port or use host localhost as the exploit target. If the
-isolated environment cannot be started, stop before executing the trigger and
-report the blocker. Do not fall back to testing in the current session.
+sandboxed builds, and launching or controlling the lab. Host port forwarding
+is allowed only for standalone VMs when their manual wiring requires it;
+scenario and test VMs must use the lab network. Forwarding does not authorize
+host-side execution of a target or trigger. If the isolated environment cannot
+be started, stop before executing the trigger and report the blocker. Do not
+fall back to testing in the current session.
 
 Implementation
 

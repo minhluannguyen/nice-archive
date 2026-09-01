@@ -10,14 +10,14 @@ For the library API itself, see
 
 ## Goal of a NICE Archive report
 
-A good report case should answer five questions:
+A good report case should answer six questions:
 
 1. What vulnerability is being reproduced?
 2. Which software and versions are vulnerable or fixed?
 3. What does the scenario look like, and which machines are involved?
-4. How are the machines are configured to reproduce the vulnerability?
-4. What action triggers the vulnerability?
-5. Which assertion can be used to check the vulnerability of the system?
+4. How are the machines configured to reproduce the vulnerability?
+5. What action triggers the vulnerability?
+6. Which assertion checks the vulnerability of the system?
 
 The expected output is a directory under [`cves/`](../cves/) with:
 
@@ -58,8 +58,9 @@ If you are an LLM agent working on a new report, follow this order:
 1. Record the user shell and command-runner shell separately, plus UTC start
    time, model, harness, and which usage metadata the runtime exposes.
 2. Do read-only discovery first and search for an existing matching case.
-3. Create a dedicated working directory for this CVE before
-   implementation, unless the user explicitly asks to do otherwise. 
+3. Work only in the case directory or in the worktree assigned by the
+   orchestrator. Do not create or switch Git branches unless the user or
+   orchestration workflow explicitly requires it.
 4. Identify vulnerable and fixed versions.
 5. Record exploit provenance before copying or adapting exploit code.
 6. Search nixpkgs history before building vulnerable software from source.
@@ -88,8 +89,9 @@ requirements:
   building vulnerable software from source.
 - Use `nix-versions` or Nixpkgs history before deciding that a source build is
   necessary.
-- Create one dedicated Git branch per CVE case before implementation, and do
-  not combine unrelated CVE work on one branch.
+- Keep each CVE's changes isolated to its case directory or assigned worktree.
+  Do not create or switch Git branches unless the user or orchestration
+  workflow explicitly requires it.
 - Treat shell detection as a pre-execution gate. Do not run shell-dependent or
   compound commands until the command runner's interpreter is known.
 - Give every command-execution call a finite deadline and never wait
@@ -238,12 +240,59 @@ generated VM, or an explicit container execution command. Restrict networking
 and mounts, use guest-only fixtures, and never target host `localhost`. If the
 lab cannot start, report the blocker instead of falling back to the host.
 
+Host port forwarding is allowed only for standalone VMs when their manual
+wiring requires it. Scenario and automated-test VMs must communicate over the
+lab network. Forwarding does not authorize host-side target or trigger
+execution.
+
+### Framework suitability gate
+
+Resolve platform eligibility before creating or modifying a case, adapting a
+PoC, choosing package pins, or starting a lab. A vulnerability fits NICE
+Archive only when all of the following are true:
+
+- the vulnerable target runs on Linux;
+- the affected behavior and its required configuration apply to the Linux
+  build;
+- vulnerable and fixed behavior can reasonably be represented with Nix,
+  NixOS, Linux VMs, or a suitable Linux container; and
+- a deterministic, machine-checkable Linux-side oracle is possible.
+
+For cross-platform software, verify from authoritative evidence that the Linux
+build is affected by the same flaw. A Linux attacker, client, build host, or
+diagnostic utility does not make a non-Linux target eligible.
+
+Reject Windows-only components, Apple- or Android-specific behavior, hardware,
+firmware, microcode, BIOS/UEFI, flaws requiring physical equipment, and hosted
+products with no reproducible affected Linux package. When applicability is
+uncertain, perform only enough read-only research to resolve it; do not begin
+implementation while it remains unresolved.
+
+For an out-of-scope request, stop before creating a case or running a target or
+PoC and return:
+
+```text
+CVE:
+Framework eligibility: out of scope
+Affected target/platform:
+Reason:
+Evidence:
+References:
+```
+
+Do not leave a partial case for a CVE rejected by this gate. Suggest an
+alternative Linux vulnerability only when the user asks for one.
+
 ## 1. Create a case directory
 
-Before implementation, create a dedicated working directory for the CVE case. The default location is under `cves/` with a name that follows the convention:
+Before implementation, locate an existing matching case or create one under
+`cves/`. When an orchestrator assigned a Git worktree, create the case inside
+that worktree; do not create or switch branches unless the user or workflow
+explicitly requires it. Once the topology is known, create only the role
+subdirectories it actually needs, for example:
 
 ```bash
-mkdir -p cves/cve-yyyy-nnnn-short-name/exploit
+mkdir -p cves/cve-yyyy-nnnn-short-name/exploit/attacker
 ```
 
 Naming convention:
@@ -793,14 +842,32 @@ start_all()
 server.wait_for_unit("multi-user.target", timeout=120)
 server.wait_for_unit("vulnerable-service.service", timeout=120)
 server.wait_for_open_port(8080, timeout=60)
+variant = server.succeed(
+    "cat /etc/nice-archive/cve-yyyy-nnnn-variant",
+    timeout=10,
+).strip()
 
 # Run the same bounded trigger in both variants and collect its evidence.
 attacker.wait_for_unit("multi-user.target", timeout=120)
-attacker.succeed("run-exploit http://server:8080", timeout=30)
+status, output = attacker.execute(
+    "run-exploit http://server:8080",
+    timeout=30,
+)
+print(output)
 
-# Expect the target-unique marker only when the vulnerable effect occurred.
-ab.check_file_contains(attacker, "/tmp/result.txt", "Pwned!")
+# Prove the vulnerable effect or its absence, then check fixed target health.
+if variant == "vulnerable":
+    ab.check_file_contains(attacker, "/tmp/result.txt", "NICE-CVE-YYYY-NNNN-FLAG")
+else:
+    assert variant == "fixed", f"Unknown variant marker: {variant}"
+    ab.check_file_exists(attacker, "/tmp/result.txt", is_existing=False)
+    server.succeed("systemctl is-active vulnerable-service.service", timeout=30)
 ```
+
+Have the target VM plant the variant file deterministically from
+`isVulnerable`; the generator does not inject a `variant` Python variable into
+`test.py`. The trigger's exit status may differ after the fix, so the security
+oracle and fixed-target health—not exit status alone—decide the result.
 
 The end of the test should be the machine-checkable oracle. Prefer the
 framework's assertion blocks for that oracle:
@@ -843,18 +910,6 @@ DOM change, or another effect caused by JavaScript—and repeat the identical
 programmatic browser workflow against the fixed variant. Manual browser use may
 supplement scenario debugging, but it does not replace the automated browser
 path in `test.py`.
-
-For example:
-
-```python
-if variant == "vulnerable":
-    ab.check_file_contains(server, f"{workdir}/hacked", "NICE-CVE-WRITE")
-    ab.check_file_exists(server, f"{workdir}/hacked2")
-else:
-    assert variant == "fixed", f"Unknown variant marker: {variant}"
-    ab.check_file_exists(server, f"{workdir}/hacked2", is_existing=False)
-    ab.check_file_contains(server, f"{workdir}/hacked", "protected original")
-```
 
 Useful NixOS test-driver methods include the following. The
 [official NixOS test-driver reference](https://nixos.org/manual/nixos/stable/#ssec-machine-objects)
@@ -1138,14 +1193,18 @@ nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 nice-archive vm --case cve-yyyy-nnnn-short-name --name attacker
 ```
 
-For standalone VMs, you must wire the reproduction environment yourself. That
-usually means one or more of:
+For standalone VMs, you must wire the reproduction environment yourself. This
+is the only workflow where host port forwarding is allowed. Wiring usually
+means one or more of:
 
 - adding `virtualisation.forwardPorts` in the VM config;
-- using host ports to connect the attacker and target;
+- using forwarded ports to connect standalone guest roles;
 - configuring static service addresses in `/etc/hosts`;
 - starting services manually inside the guests; and
 - keeping several terminal windows open at the same time.
+
+Keep the trigger inside the appropriate guest. Scenario and automated-test VMs
+must use their VM network instead of host forwarding.
 
 Document the manual wiring in the case README so another user can reproduce
 the exploit without reading the Nix code.
@@ -1427,7 +1486,8 @@ Before considering the report done:
       duplicate sections or unnecessary implementation narrative.
 - [ ] The case README does not name, cite, or compare itself with another CVE
       example case.
-- [ ] Each CVE is isolated on its own working directory.
+- [ ] Each CVE is isolated to its case directory or orchestrator-assigned
+      worktree; no unrequested branch changes were made.
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
 - [ ] Ordinary commands, readiness checks, complete tests, and scenarios obey
