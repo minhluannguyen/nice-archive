@@ -10,9 +10,9 @@ Archive as a reproducible vulnerability-reporting framework.
   generated outputs, and assertion helper signatures.
 
 - [Reporting a vulnerability with NICE Archive](./reporting-vulnerabilities.md)  
-  Use this when you want a step-by-step workflow for building a new CVE report,
-  including VM design, flake structure, tests, CLI commands, interactive
-  debugging, and handoff checklists.
+  This is the detailed implementation playbook behind the concise
+  repository-level `AGENTS.md` contract. Use it for VM design, flake structure,
+  tests, CLI commands, interactive debugging, and handoff checklists.
 
 - [LLM CVE reproduction prompt](./LLM-reproduction-prompt.md)
   Use this copyable prompt when an agent does not automatically load the

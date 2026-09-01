@@ -1,788 +1,273 @@
 # NICE Archive Agent Instructions
 
-## When These Instructions Apply
+These instructions apply when the user asks to reproduce a vulnerability, for
+example `Reproduce CVE-YYYY-NNNN`. Derive the affected software, versions,
+case name, topology, and oracle from the request, repository state, and
+authoritative research. Do not reuse assumptions from another CVE.
 
-Use this workflow whenever the user asks to reproduce a vulnerability with a
-request such as:
+The objective is an isolated, machine-checkable NICE Archive case that proves
+both vulnerable and fixed behavior. This file is the concise normative
+contract. Follow the detailed procedures in
+[`docs/reporting-vulnerabilities.md`](./docs/reporting-vulnerabilities.md) and
+the API reference in
+[`docs/nice-archive-libs.md`](./docs/nice-archive-libs.md).
 
-```text
-Reproduce CVE-YYYY-NNNN
-```
+## 1. Safety gates
 
-The CVE ID, affected software, case name, package versions, topology, and test
-oracle must be derived from the user's request, repository state, and reliable
-research. Do not assume details from a previous CVE task. Follow any additional
-constraints or supplied PoC in the user's request.
-
-Act as an autonomous cybersecurity research agent working inside this local
-repository. The objective is to create or complete an isolated,
-machine-checkable reproduction that runs through the NICE Archive CLI and
-proves both vulnerable and fixed behavior.
-
-## Scope And Safety
+### Scope and isolation
 
 - Work only in this repository, except for read-only upstream research and
-  downloads required by Nix. Put temporary artifacts in `/tmp` or the case
-  directory.
-- Never execute vulnerable target software, fetched PoCs, malicious inputs, or
-  exploit triggers directly in the agent's current shell or on the host.
-  Execute them only after establishing an appropriate isolation boundary.
-- Never target public systems, host `localhost`, unrelated local services, or
-  any machine not created for the reproduction.
-- Do not change global system or Nix configuration, unrelated user projects,
-  or unrelated CVE cases.
-- Run `git status --short` before editing and again before reporting. Preserve
-  all user changes, including changes in files relevant to the task.
-- Do not use destructive Git commands. Do not remove files unless their
-  ownership and purpose are clear.
-- Treat fetched PoCs and historical software as untrusted. Inspect them before
-  running them and keep their effects confined to the lab.
-- Do not claim a build, exploit, or test succeeded unless the command was
-  actually run and its output directly supports that claim.
+  downloads required by Nix. Use `/tmp` or the case directory for temporary
+  artifacts, and preserve all user changes.
+- Never execute vulnerable target software, PoCs, malicious inputs, exploit
+  triggers, crash tests, or resource-exhaustion tests directly on the host or
+  in the coding-agent shell. Never target public systems, or unrelated services.
+- Before executing a target or trigger, state the isolation boundary, why it
+  fits the vulnerability class, and how the command is known to run inside it.
+  Restrict networking and mounts and use only guest fixtures and secrets.
+- Prefer NixOS test or standalone VMs. Use a container only for a user-space
+  flaw that cannot exercise the host kernel, container runtime, devices, or
+  host privileges. Kernel flaws, local privilege escalation, system services,
+  destructive tests, and uncertain PoCs require a VM.
+- Host port forwarding is allowed only for standalone VMs when their manual
+  wiring requires it. Scenario and test VMs must use the lab network, and port
+  forwarding never authorizes host-side execution of a target or trigger.
+- `nix develop`, `nix-shell`, and Nix build sandboxing are dependency or build
+  environments, not execution boundaries for the target or trigger. If the
+  lab cannot be established, stop before the trigger and report the blocker.
+- Inspect fetched PoCs and historical software before guest execution. Do not
+  change global configuration, use destructive Git commands, or modify
+  unrelated cases or projects.
 
-## Isolation Gate
+The full boundary procedure is documented under
+[Isolation gate](./docs/reporting-vulnerabilities.md#isolation-gate).
 
-The coding-agent session, user terminal, repository development shell, and host
-OS are not test targets. Host-side work is limited to reading and editing files,
-reviewing source, safe metadata queries, sandboxed Nix builds, and launching or
-controlling an isolated environment.
+### Framework suitability
 
-Before running any target binary, PoC, trigger, malformed input, crash test,
-resource-exhaustion test, or vulnerable service:
+Before implementation, confirm that the affected target and behavior apply to
+Linux, can be represented with Nix/NixOS/Linux VMs or a suitable Linux
+container, and admit a machine-checkable Linux-side oracle. A Linux attacker
+or build host does not make a Windows-, Apple-, Android-, hardware-, firmware-,
+or hosted-product-only vulnerability eligible.
 
-1. Choose and state the isolation boundary.
-2. Explain why it is suitable for the vulnerability class.
-3. Confirm the command will execute inside that boundary.
-4. Restrict networking and host mounts to the minimum required.
-5. Use guest-only fixtures and secrets.
+If the target is out of scope, do not create or modify a case and do not run a
+PoC. Return the CVE, affected target/platform, reason, evidence, and references.
 
-Prefer a NixOS test VM or standalone VM. A container may be used for a
-user-space vulnerability only when the trigger cannot exercise the host kernel,
-container runtime, devices, or host privileges. Kernel flaws, local privilege
-escalation, system services, destructive tests, and uncertain PoCs require a
-VM.
+Use the detailed
+[Framework suitability gate](./docs/reporting-vulnerabilities.md#framework-suitability-gate)
+to resolve uncertain and cross-platform cases.
 
-A `nix-shell` or `nix develop` environment isolates dependencies but is not a
-security boundary. It may be used to build or launch the lab, but it does not
-by itself authorize executing a vulnerable program or PoC on the host. Nix
-build sandboxing may compile untrusted inputs, but the resulting target and
-trigger must still run in a VM or suitable container.
+### Shell and environment record
 
-Use an execution path that makes the boundary visible, such as NixOS
-test-driver machine methods, SSH into a generated VM, or `container exec` into
-a purpose-built container. Do not fall back to host execution when isolation
-fails. Leave a partial implementation and report the blocker instead.
+Before repository exploration, record in working notes:
 
-## Shell Gate And Environment Record
+- the user shell, when exposed, and the command-runner shell as separate
+  values;
+- a host-sourced UTC start timestamp;
+- the runtime-exposed model and agent harness; and
+- whether input, output, total-token, and cost telemetry are exposed.
 
-Before repository exploration, record the following in working notes:
+Environment or tool metadata is authoritative for the command runner; `$SHELL`
+usually identifies only the login shell. Until the runner is known, use only
+direct, non-interactive, single-program invocations—no control operators,
+redirection, substitution, variables, globs, aliases, functions, or heredocs.
+Afterward, use that shell's syntax or explicitly select a startup-file-free
+interpreter. Never launch an interactive/login shell for automation or source
+user startup files. Scripts and human-facing commands must name or match their
+intended interpreter.
 
-- the user's interactive shell, when exposed by the environment;
-- the shell actually used by the agent's command-execution tool;
-- a UTC start timestamp from the host;
-- the LLM model and agent harness, but only when they are exposed by the
-  runtime;
-- whether the runtime exposes input tokens, output tokens, total tokens, or
-  monetary cost.
+Record an end timestamp after validation. Never guess model identity, tokens,
+cost, or elapsed time, search hidden state for telemetry, or treat unavailable
+telemetry as a blocker. Use `not available (not exposed by harness)`.
 
-Treat the user shell and command-runner shell as separate values. Environment
-metadata or an explicit tool `shell` setting is authoritative for the command
-runner. `$SHELL` usually names the user's login shell and is not sufficient
-proof of which interpreter executes a tool command.
+See [Shell execution gate](./docs/reporting-vulnerabilities.md#shell-execution-gate)
+for command examples and the complete environment-record procedure.
 
-This is a hard pre-execution gate:
+### Time and progress bounds
 
-- Until the command-runner shell is known, run only direct, non-interactive,
-  single-program commands. Do not use pipelines, `&&`, `||`, `;`, redirection,
-  heredocs, command substitution, shell variables, globs, aliases, or shell
-  functions.
-- Once known, write syntax for that shell or select an interpreter explicitly.
-  Use non-interactive, startup-file-free invocation where available, such as
-  `bash --noprofile --norc -c`, `zsh -f -c`, or `fish --no-config -c`.
-- Never launch an interactive or login shell merely to run automation. Do not
-  wait for a shell prompt, source the user's startup files, or assume aliases
-  and shell functions exist.
-- Use `expect`/`pexpect` when the workflow genuinely requires a TTY or
-  human-style prompt interaction.
-- Prefer direct tool arguments and `nix develop -c <program> <args>` over shell
-  activation snippets.
-- A script with Bash syntax must have a Bash shebang and be invoked with Bash;
-  it must not be sourced by Fish or Zsh. Apply the same rule to every shell.
-- Commands shown for a human must match the recorded user shell or explicitly
-  name the required interpreter.
-
-Every command-execution call must have a finite tool deadline. Commands that
-intentionally stay active, such as VM scenarios, must run in a managed session
-with a bounded readiness check and an explicit termination step. If a command
-unexpectedly requests input or stops producing progress, terminate it at the
-deadline, inspect why, and correct the shell or invocation. Never wait
-indefinitely for a presumed prompt or completion.
-
-Enforce these hard wall-clock limits from process launch:
+Every command must have a finite tool deadline. Enforce these process-level
+limits from launch:
 
 | Activity | Maximum runtime |
 | --- | --- |
 | Ordinary command | 5 minutes |
 | VM or service readiness | 5 minutes |
-| Complete NixOS test, including build and execution | 30 minutes |
-| Complete interactive scenario, including startup, validation, and cleanup | 45 minutes |
-
-Apply the limit at launch with both the execution tool's deadline and a
-process-level watchdog where available. A larger tool timeout must not weaken
-the process-level limit. Do not extend a deadline while the command is running
-or restart merely to reset the clock. Timeout exit statuses such as `124` or a
-forced kill are failures or blockers, never evidence of fixed behavior.
-
-Apply this output watchdog to ordinary commands, VM activity, and NixOS tests:
-
-- If a command can run for more than two minutes, start it as a managed session
-  rather than using one long blocking call.
-- Poll the session at least once every two minutes. Each poll must inspect and
-  report new output or perform a bounded VM/test-driver health check.
-- Track the time of the last meaningful log line or successful bounded
-  response. Repeated identical output and mere process existence do not count
-  as progress.
-- If there is no new meaningful output and no successful bounded response for
-  five continuous minutes, explicitly terminate the command. Do not continue
-  waiting merely because the process still exists.
-- Enforce the five-minute inactivity cutoff independently of the two-minute
-  polling interval. Poll at or before two and four minutes, then perform the
-  cutoff check at five minutes rather than waiting for a six-minute poll.
-- Terminate gracefully first with the managed session's interrupt or `TERM`.
-  Wait at most 30 seconds, then force termination if necessary. Stop only the
-  process group or VM processes belonging to the current command; never use a
-  broad host-wide kill pattern.
-- After termination, collect the last output, exit status, service or VM state,
-  and relevant logs. Check for and stop any child test-driver or QEMU processes
-  left by that command before retrying.
-
-For an interactive scenario, a successful bounded test-driver or SSH command
-counts as a response even when the scenario terminal itself is quiet. The
-health check must finish within the same five-minute inactivity window.
-
-## Subagent Orchestration
-
-When the agent harness provides subagents, use them to help with manual
-scenario validation and long-running automated tests. Subagents are execution
-helpers, not decision makers: the main agent remains responsible for research,
-isolation choices, package pins, safety limits, stuck-test decisions,
-documentation, and final claims.
-
-Subagent availability alone is insufficient. Delegate ownership of a scenario
-or test only when the harness returns a detached session handle immediately and
-the main agent can poll output and terminate that exact session independently.
-If the subagent call is synchronous, non-cancellable, or hides the process
-handle, the main agent must start and own the managed command. In that mode,
-subagents may perform only bounded finite work such as research, log analysis,
-or individual SSH commands. Never block the main agent waiting for a subagent
-that is itself waiting for an interactive scenario to exit.
-
-Use this orchestration pattern when practical:
-
-- Start scenario mode with a dedicated scenario subagent using
-  `nice-archive scenario --case <case> --vulnerable <true|false> --popup false`.
-  The subagent must run it as a managed long-lived session, capture the printed
-  SSH commands, keep the scenario alive, and report readiness and new output
-  to the main agent. It must not run the exploit unless explicitly instructed.
-  Apply the 45-minute process-level deadline when the scenario is launched.
-  Scenario startup is serialized by the NICE Archive CLI. Waiting for or
-  acquiring this lock is expected output, not a stuck scenario by itself.
-  Automated `nice-archive test` runs are not serialized by this lock and may
-  still run in parallel.
-- Spawn one or more VM-operator subagents to use the printed SSH commands for
-  the relevant VMs. These subagents perform bounded guest-side health checks,
-  run the exploit or trigger inside the VM, collect guest logs and oracle
-  evidence, and report exact commands and outputs. They must use only guest
-  fixtures and must never target host `localhost` or unrelated services.
-- The main agent monitors the scenario subagent and VM-operator subagents,
-  decides which VM commands to run next, records the manual vulnerable and
-  fixed observations, and explicitly terminates the scenario when done.
-- Attempt scenario mode before falling back to standalone VMs, unless the case
-  generator does not expose interactive scenarios or repository documentation
-  shows that standalone VMs are required.
-
-For automated validation, spawn a test-runner subagent for each long-running
-`nice-archive test` command only when the subagent capability gate passes. The
-subagent runs the test in a managed session and reports progress, but the main
-agent applies the output watchdog and decides whether the test is stuck. If the
-watchdog threshold is reached, the main agent instructs the subagent to
-interrupt or terminate the test, or terminates the managed session itself if
-the subagent cannot.
-
-This delegation is allowed only when the capability gate above passes. Apply
-the 30-minute process-level deadline when each test starts; the main agent must
-remain able to terminate it without waiting for the subagent to return.
-
-Record an end timestamp after validation so elapsed wall-clock time can be
-calculated. Never estimate token counts or billing data from context length or
-elapsed time. If the runtime does not expose a metadata value, record it as
-`not available (not exposed by harness)` rather than guessing.
-
-Usage telemetry is best-effort documentation, not a completion gate. Agent
-environments such as IDE chat integrations may expose no per-task token counts,
-model identifier, or billing data to the agent. Do not search hidden files,
-query unrelated APIs, approximate tokens from text length, or allocate a
-subscription price to one run. Continue the reproduction and record the reason
-the value is unavailable.
-
-## Framework Suitability Gate
-
-Before creating or modifying a case, adapting a PoC, selecting package pins, or
-starting an isolated environment, determine whether the CVE fits NICE Archive.
-Use minimal read-only research from authoritative sources to make this decision
-early.
-
-A CVE is in scope only when all of these are true:
-
-- the vulnerable target is software or a package that runs on Linux;
-- the affected behavior and required configuration apply to a Linux build;
-- the vulnerable and fixed behavior can reasonably be represented with Nix,
-  NixOS, Linux VMs, or Linux containers; and
-- a machine-checkable Linux-side oracle is possible.
-
-Cross-platform software is in scope only when authoritative evidence confirms
-that its Linux build is affected by the same vulnerability. A Linux attacker,
-client, build host, or diagnostic tool does not make a non-Linux target
-eligible.
-
-Reject the reproduction as out of scope when the vulnerable target is:
-
-- Windows-only software, a Windows component, or behavior specific to Windows;
-- macOS-, iOS-, or Apple-platform-specific software or behavior;
-- Android software, mobile applications, or mobile-platform-specific behavior;
-- hardware, firmware, microcode, BIOS/UEFI, or a flaw requiring physical
-  equipment or a hardware device; or
-- a hosted product with no reproducible affected Linux software/package that
-  can be run inside this framework.
-
-If platform applicability is uncertain, perform only enough additional
-read-only research to resolve it. Do not begin implementation while eligibility
-is unresolved.
-
-When the CVE is out of scope, stop before creating a case directory or running
-any target or PoC. Return a compact rejection report containing:
-
-```text
-CVE:
-Framework eligibility: out of scope
-Affected target/platform:
-Reason:
-Evidence:
-References:
-```
-
-Do not leave a partial case for a CVE rejected by this gate. Suggest a Linux
-software CVE only when the user explicitly asks for an alternative.
-
-## Required Discovery
-
-Do read-only discovery before implementation. Read at least:
-
-```text
-README.md
-docs/README.md
-docs/reporting-vulnerabilities.md
-docs/nice-archive-libs.md
-nice-archive.py
-```
-
-Inspect a small number of relevant working cases under `cves/`. Select them by
-shared package type, network topology, historical nixpkgs strategy, generator,
-or test oracle rather than reading every case.
-
-Search for an existing case containing the requested CVE ID before creating a
-directory. If one exists and represents the same vulnerability, audit and
-complete it in place. Treat previous agent work as unverified until its
-research claims, package pins, manual reproduction, and automated tests have
-been checked. Create a distinct directory only when an existing matching ID is
-demonstrably unrelated, and explain the naming decision.
-
-Before changing code, understand:
-
-- case naming and directory organization;
-- `flake.nix` structure and generated output names;
-- `nice-archive-lib.testsGenerator` and the other supported generators;
-- package, system, and invariant VM variants;
-- vulnerable and fixed package selection;
-- NixOS test node names and their relationship to `test.py` variables;
-- assertion helpers from `assertion_blocks`;
-- CLI behavior for tests, scenarios, standalone VMs, lock updates, logging,
-  and automatic staging of case files.
-
-Repository documentation is authoritative for framework conventions. Existing
-case code is an example, not proof that a pattern is current or correct.
-
-## Vulnerability Research
-
-Research the requested CVE before implementation. NVD is a starting point, not
-the sole source. Prefer primary and authoritative sources, and record exact
-URLs in the case README.
-
-Consult and reconcile, where available:
-
-- the NVD or CNA record;
-- the upstream advisory and security notice;
-- fixing commits, patches, and regression tests;
-- upstream release notes;
-- a public PoC or exploit with clear provenance;
-- distribution advisories;
-- nixpkgs history for usable vulnerable and fixed packages.
-
-Determine and document:
-
-- affected software and exact affected version range;
-- the selected vulnerable version and why it is a practical member of that
-  affected range;
-- fixed version or commit;
-- vulnerability class and root cause;
-- configuration and runtime prerequisites;
-- Linux and NixOS applicability;
-- available PoCs or upstream regression tests;
-- expected vulnerable and fixed behavior;
-- a reproducible Nix/NixOS packaging strategy.
-
-Verify every URL, commit hash, version range, nixpkgs revision, package
-attribute, and source hash before recording it. If sources conflict, describe
-the conflict and favor upstream evidence. Never fabricate missing facts.
-
-## Packaging Strategy
-
-Use `nix-versions`, nixpkgs history, and existing case patterns before deciding
-to build vulnerable software from source. Prefer historical nixpkgs packages
-when they provide the required versions.
-
-The vulnerable case does not need to use the last affected release. It may use
-any version that authoritative evidence places inside the affected range.
-Among suitable affected versions, prefer one already packaged by nixpkgs and
-compatible with the narrowest package-level pin. Do not build a particular
-boundary release from source merely because it is the newest affected version.
-
-Do not copy, transcribe, extract, vendor, or reconstruct any part of the
-affected software, library, or package source tree into the case. In
-particular, do not check in target source snapshots, individual upstream source
-files, copied functions, or reduced local reimplementations of the vulnerable
-code. Obtain the target in one of these reproducible ways:
-
-- select it from an immutable nixpkgs revision; or
-- when no suitable nixpkgs package can be used after following the priority
-  order below, have Nix fetch a complete, hash-verified source release, tag, or
-  commit from the original upstream project and build it in the Nix sandbox.
-
-Normal Nix unpacking of a fetched upstream source is permitted. This rule does
-not prohibit case-owned VM configuration, wrappers, tests, or exploit/trigger
-code that is not part of the affected product. Fetch any required upstream or
-nixpkgs target patch by immutable URL with a verified hash instead of copying
-its source hunks into the case.
-
-Use this priority order unless the target requires a documented exception:
-
-1. Select existing vulnerable and fixed user-space packages from historical
-   nixpkgs revisions and use `variant = "package"` so only the target package
-   changes.
-2. If package-level pinning cannot represent the required dependencies or
-   system component, pin the whole target VM with `variant = "system"`.
-3. If whole-system pinning still cannot represent the required old kernel or
-   old NixOS environment while retaining the modern test driver, use
-   `oldKernelTestsGenerator` (or `oldKernelNixosTest` only when its lower-level
-   behavior is required).
-4. Only when no suitable vulnerable or fixed package can be obtained from
-   nixpkgs through the applicable strategies above, define or override a Nix
-   package that fetches and builds the complete original upstream source.
-
-For every vulnerable and fixed pin:
-
-- prove the selected vulnerable version falls within the authoritative
-  affected range; it need not be the last affected version;
-- prove the selected package evaluates to the intended version;
-- use full immutable revisions in final source URLs when practical;
-- verify source hashes rather than copying unexplained values;
-- ensure the case contains no copied or extracted affected-product source;
-- keep package selection near the VM that needs it for package variants;
-- keep helper machines invariant unless they genuinely require another pin;
-- make vulnerable and fixed environments differ only where necessary.
-
-Use `nice-archive-lib.testsGenerator` unless the framework documentation or a
-demonstrated compatibility issue requires another generator. Explain any
-deviation in the case README.
-
-## Case Design
-
-Use the naming convention:
-
-```text
-cves/cve-yyyy-nnnn-short-lowercase-description/
-```
-
-A typical case contains:
-
-```text
-flake.nix
-default.nix        # only when required
-README.md
-test.py
-vm-server.nix
-vm-attacker.nix
-exploit/
-  attacker/
-  server/
-package/           # only for complex packaging expressions
-flake.lock
-```
-
-Keep the case root easy to scan. Put primary entry points and orchestration
-files there: `flake.nix`, `test.py`, the case `README.md`, VM configuration
-files, and `default.nix` when the selected generator or legacy workflow needs
-it. Preserve an existing legacy `readme.md` filename when completing a case
-unless a rename is explicitly in scope.
-
-Put every exploit-related script, payload, helper service, malformed fixture,
-and other trigger artifact under `exploit/`. Divide that directory by the VM
-or execution environment where each artifact runs, using role names that match
-the topology, such as `exploit/attacker/`, `exploit/server/`, or
-`exploit/client/`. Use `exploit/shared/` only for artifacts genuinely consumed
-by multiple roles. Do not leave exploit artifacts loose in the case root.
-
-Keep a short packaging expression in the case root when it remains easy to
-understand. If packaging the affected software requires a large or multi-file
-expression, place the packaging-only files under `package/` (or
-`package/<target>/` when there are several targets) and import them from the
-root entry point. This directory must not contain copied affected-product
-source; the Nix expression must fetch that source according to the Packaging
-Strategy above.
-
-Adapt the file set and role subdirectories to the vulnerability; do not create
-empty placeholder files or directories. Common topologies are a single target
-VM, client/server, attacker/server, or a multi-service network. Use the
-smallest topology that faithfully models the real preconditions and keeps the
-trigger isolated.
-
-Use a minimum realistic topology:
-
-- Preserve every service, network, privilege, and trust boundary that the
-  vulnerability depends on.
-- Give an intermediary service its own VM when it represents a distinct
-  deployment role. For example, place a reverse proxy, gateway, or load
-  balancer on a separate proxy VM from the backend server rather than running
-  both on the server VM.
-- Apply the same rule to required mail relays, databases, identity providers,
-  DNS servers, file servers, and other protocol intermediaries when traffic or
-  trust crosses that boundary.
-- Do not add a VM for a helper process that has no independent role in the
-  vulnerability. Co-locate services only when that reflects a normal
-  deployment and separation cannot affect the security behavior.
-- Keep the topology practical: each VM must have a stated role, and removing
-  any VM should either break a documented precondition or weaken isolation.
-- Keep invariant infrastructure identical between vulnerable and fixed runs.
-
-Document each VM, its service role, and the security-relevant communication
-path. Explain any intentional co-location of distinct services.
-
-Make VM roles explicit. Use `variant = "package"` when only the selected
-package changes, `variant = "system"` when the machine's nixpkgs pin must
-change, and `variant = "invariant"` for machines shared by both scenarios.
-
-## Exploit And Oracle
-
-Reuse a supplied or publicly available PoC or upstream regression test whenever
-one exists. It may be modified, reduced, or wrapped to run deterministically in
-the NixOS lab. Preserve the original security-relevant trigger unless a change
-is required and documented.
-
-If no usable PoC exists, a minimal trigger may be derived directly from the
-CVE description, upstream advisory, patch, or regression test. Do not invent a
-new exploit technique or write an unrelated PoC from scratch. Document the
-authoritative artifact from which each trigger step was derived.
-
-Keep final exploit code under the machine- or environment-specific
-subdirectory of the case's `exploit/` directory. Record:
-
-- original source and author when available;
-- whether it was copied, adapted, simplified, or rewritten;
-- every meaningful local change and why it was required;
-- safety limits added for automation.
-
-Exploit workflows should be human-readable. When the steps are small, prefer
-small single-purpose helpers under `exploit/<role>/`, or simple commands
-directly in `test.py`, over one large script that hides the whole process. A
-larger script is acceptable for genuinely complex work such as authentication
-flows, request/response handling, input processing, or protocol setup.
-Variant-specific expectations and pass/fail decisions belong in `test.py`, not
-in exploit code.
-
-Keep `test.py` straightforward and linear enough to serve as the manual
-reproduction outline. Add concise comments at the meaningful phases—target
-readiness, trigger execution, evidence collection, and final oracle—stating
-both why the step exists and the expected result. In variant branches, make
-the vulnerable and fixed expectations explicit. Do not comment obvious Python
-syntax or bury the workflow in abstractions that make the security sequence
-harder to follow.
-
-The oracle must independently prove the security property. Strong examples
-include:
-
-- known guest-only content disclosed across a path boundary;
-- a target-unique flag, credential, token, or user record recovered by the
-  attacker and absent from helper machines;
-- a marker file created with otherwise unavailable privileges;
-- a controlled privilege-boundary crossing verified by UID and GID;
-- an expected crash, signal, or core dump;
-- a measurable resource-exhaustion condition;
-- a service log containing a specific security-relevant event;
-- an upstream regression test that fails before the fix and passes after it.
-
-Do not treat any of these as sufficient by themselves:
-
-- the exploit process exited successfully;
-- the exploit printed `success`;
-- an output file merely exists;
-- a request returned some non-error status;
-- the fixed exploit returned a nonzero status.
-
-The vulnerable branch must prove the documented effect. The fixed branch must
-apply the same trigger, prove the effect is absent, and verify that the target
-remained healthy enough for the comparison to be meaningful.
-
-Cross-check oracle evidence at the security boundary. If the attacker exploits
-a server with RCE, verify the unauthorized effect on the server, such as a file,
-process, user, log entry, or privilege change created on the server. If the
-attacker steals data from the server, verify attacker-controlled output against
-the original target-only value planted on the server. Do not rely solely on
-attacker-side output when the security effect occurs on another VM.
-
-Prefer target-unique markers over normal machine behavior. Plant deterministic,
-guest-only evidence that exists only because the lab configured the vulnerable
-target, such as a flag file, a special admin account, a flag-style password, a
-database row, an API token, an email, or a service-only credential. For
-credential disclosure, verify not only that the bytes were leaked but also, when
-practical, that the attacker can use the leaked username/password or token to
-access the protected guest resource. For file disclosure, do not merely check
-for generic `/etc/passwd` content such as `root:`; add a target-specific user,
-GECOS marker, or adjacent secret file and assert that unique marker appears in
-the attacker-controlled output. The fixed branch must assert the same marker is
-absent while the service remains healthy.
-
-Use `assertion_blocks` for the final security oracle in each branch whenever a
-suitable helper exists. Raw Python assertions may support control flow and
-health checks but must not replace an applicable assertion block. If no helper
-fits, explain why in the case README and implement a deterministic direct
-assertion.
-
-Use only guest fixtures and guest files for the oracle. Do not read or modify
-host secrets.
-
-## Validation Workflow
-
-Work from cheap checks to expensive VM runs:
-
-1. Inspect repository state, documentation, similar cases, and any existing
-   target case.
-2. Complete source research and choose verified package pins.
-3. Design target-unique oracle markers and implement the flake, VM modules,
-   trigger, and initial documentation.
-4. Evaluate flake outputs and confirm package versions.
-5. Start the vulnerable scenario with a scenario subagent only when the
-   capability gate passes; otherwise, the main agent owns the managed scenario.
-   Use standalone VMs only when scenario mode is unavailable or inappropriate.
-6. Use VM-operator subagents, printed SSH commands, popup VM, or test-driver
-   shell to check target health and run the trigger manually inside the lab.
-7. Repeat the manual trigger against the fixed scenario.
-8. Encode the verified workflow in `test.py`.
-9. Run the complete vulnerable automated test through a test-runner subagent
-   only when the capability gate passes; otherwise, the main agent owns it.
-10. Run the complete fixed automated test the same way.
-11. Update the README with verified commands and observations.
-12. Clean or ignore generated artifacts and inspect `git status --short`.
-
-All waits and potentially blocking triggers must have explicit finite
-deadlines. This is especially important for the fixed variant, where a blocked
-exploit can otherwise wait forever and be mistaken for successful mitigation.
-
-- In `test.py`, pass explicit native `timeout=` arguments to NixOS test-driver
-  methods such as `execute`, `succeed`, `fail`, polling helpers, and wait
-  helpers. Do not embed the shell `timeout` command in guest command strings
-  when the test-driver method provides a timeout parameter.
-- Keep connect and read timeouts inside network clients and PoCs as a separate
-  application-level bound. Use a shell-level timeout only when operating below
-  the test-driver API or when no native timeout parameter exists, and document
-  why it is necessary.
-- Bound custom loops by elapsed time or attempt count and fail with diagnostic
-  output when the limit is reached.
-- Enforce the hard limits defined above even during first-time Nix downloads
-  and builds. If the 30-minute test limit is insufficient, report a blocker;
-  do not silently extend it.
-- On timeout, collect useful service status, journal, process, or network
-  diagnostics and report the timeout. Never report a timeout as a passing
-  fixed result by itself.
-
-Use the NICE Archive CLI for repository workflows whenever it provides the
-operation. This includes case discovery, flake updates, scenarios, standalone
-VMs, and vulnerable/fixed tests. Do not replace a supported CLI operation with
-a guessed flake attribute, direct QEMU invocation, or ad hoc container command.
-
-Run CLI commands from the repository root, normally inside `nix develop`:
-
-```bash
-timeout --signal=TERM --kill-after=30s 5m nice-archive list-cves
-timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
-timeout --signal=TERM --kill-after=30s 45m nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable false --popup false
-timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable true --log live
-timeout --signal=TERM --kill-after=30s 30m nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false --log live
-```
-
-These shell `timeout` invocations are host-side watchdogs for the complete CLI
-process. They do not replace native NixOS test-driver `timeout=` arguments for
-guest commands and waits in `test.py`.
-
-The `scenario` command takes an exclusive file lock before starting VMs and
-releases it when the scenario exits. By default the lock is
-`.nice-archive-scenario.lock` in the repository checkout. Override it with
-`NICE_ARCHIVE_SCENARIO_LOCK=/path/to/lock` when multiple processes use
-different working directories, or set `NICE_ARCHIVE_SCENARIO_LOCK=none` to
-disable it. This prevents concurrent scenario-mode VM labs from blocking each
-other. The lock does not apply to `test`, `vm`, or other commands.
-
-Outside the development shell, use `nix run . -- <command arguments>`. Prefer
-the CLI over guessing generated Nix output names. Direct `nix build`, `nix
-run`, or `nix eval` commands are allowed only when the CLI lacks the required
-operation or when diagnosing a CLI/generated-output failure. Record the reason,
-and perform final vulnerable/fixed validation through `nice-archive test`.
-Be aware that `test` and `scenario` stage the selected case with `git add` so
-Git-backed flakes can see new files; always review the index afterward.
-
-Do not stop after successful evaluation or build. A case is not reproduced
-until the trigger has been observed manually in the VM and both automated
-variants have been run, unless an external blocker makes that impossible.
-
-## Case Documentation
-
-Keep the case README compact, self-contained, and source-backed. Existing cases
-may inform implementation, but the README must not name, cite, compare
-itself with, or describe itself as modeled after another CVE case. Explain this
-case directly from its own evidence and authoritative external sources.
-
-Use this exact section order:
-
-1. `# CVE-YYYY-NNNN: Short title`
-2. `## Summary`
-3. `## Root cause`
-4. `## Reproduction`
-5. `## Run and results`
-6. `## Provenance`
-7. `## Limitations and safety`
-8. `## Reproduction metadata`
-9. `## References`
-
-The strict content form is:
-
-- `Summary`: one table containing CVE, software, vulnerable version, fixed
-  version, vulnerability class, preconditions, and impact.
-- `Root cause`: at most two short paragraphs describing the flawed behavior
-  and the fix. Do not retell the disclosure history.
-- `Reproduction`: one table containing generator, each VM and service role,
-  security-relevant communication path, package/variant selection, trigger,
-  target-unique marker, and machine-checkable oracle.
-- `Run and results`: only verified manual and automated commands, followed by a
-  table with vulnerable/fixed expected behavior, observed behavior, and test
-  status. Clearly label commands that were not run.
-- `Provenance`: one table containing advisory, fix/patch, release notes, PoC or
-  regression test, local modifications, and nixpkgs source revisions.
-- `Limitations and safety`: concise bullets. Write `None known` when there are
-  no verified limitations; do not add generic filler.
-- `Reproduction metadata`: one table using the required fields below.
-- `References`: a deduplicated list of directly relevant external sources.
-
-Do not add separate `Description`, `Overview`, `Assertions`, or `Interactive
-debugging` sections when their content fits the required form. Avoid long
-background explanations, implementation walkthroughs, repeated commands, and
-claims not needed to understand or verify the reproduction.
-
-The reproduction metadata section must state that the case was reproduced by
-an LLM agent and record:
-
-- LLM model identifier;
-- agent or coding harness;
-- reproduction date;
-- command shell used;
-- UTC start and end timestamps and elapsed wall-clock time;
-- input, output, and total token counts when exposed;
-- monetary cost, currency, and calculation source when exposed or calculated
-  from known token counts and dated model pricing;
-- telemetry source, such as runtime, UI, user-provided, calculated, or not
-  exposed by the harness.
-
-Use `not available (not exposed by harness)` for any value the runtime does not
-expose. For example, a GitHub Copilot Chat run may identify the harness while
-leaving the exact model, per-run tokens, and cost unavailable to the agent.
-If cost is calculated rather than reported by the platform, label it as an
-estimate and record the pricing source and date. A subscription price is not a
-per-run cost. Do not infer or fabricate model identity, tokens, cost, or elapsed
-time, and do not treat unavailable telemetry as a reproduction blocker.
-
-Do not preserve a claim solely because a previous agent wrote it. Correct or
-qualify anything unsupported by sources or command output.
-
-## Completion Criteria
+| Complete NixOS test | 30 minutes |
+| Complete interactive scenario | 45 minutes |
+
+Run commands that may exceed two minutes as managed sessions. Poll at least
+every two minutes and terminate after five continuous minutes without new
+meaningful output or a successful bounded health check. Send `TERM` or an
+interrupt first, wait at most 30 seconds, then force only the owned process
+group if necessary. Collect final output, status, relevant logs, and clean up
+owned test-driver or QEMU children. A timeout or forced kill is a failure or
+blocker, never proof of fixed behavior.
+
+Use native NixOS test-driver `timeout=` arguments for guest commands and waits
+when supported, plus application-level connect/read timeouts. The host-side
+process watchdog does not replace guest-side bounds. Detailed monitoring and
+termination rules are in
+[Bound waits and blocking triggers](./docs/reporting-vulnerabilities.md#bound-waits-and-blocking-triggers).
+
+## 2. Required outcomes
+
+### Research and target selection
+
+- Reconcile the CNA/NVD record with upstream advisories, fixes, release notes,
+  regression tests or public PoCs, distribution advisories, and nixpkgs
+  history. Prefer primary sources and document conflicts.
+- Verify every recorded URL, version range, commit, package attribute,
+  nixpkgs revision, and source hash. Prove the selected vulnerable version is
+  inside the authoritative affected range; it need not be the last affected
+  release. Prove the fixed selection contains the fix.
+- Search nixpkgs history before building from source. Prefer, in order:
+  historical packages with `variant = "package"`; whole-target-VM pinning with
+  `variant = "system"`; old-kernel support; then a Nix package that fetches a
+  complete immutable, hash-verified upstream source.
+- Never copy, vendor, reconstruct, or reduce affected-product source into the
+  case. Case-owned Nix expressions, VM configuration, wrappers, tests, and
+  exploit code are allowed. Fetch target patches immutably with verified
+  hashes.
+
+See [Package source strategy](./docs/reporting-vulnerabilities.md#package-source-strategy)
+for search commands, pinning patterns, and generator selection.
+
+### Case and topology
+
+- Search for the CVE before creating a directory. Audit and complete the same
+  case in place; treat existing claims and test results as unverified.
+- Use `cves/cve-yyyy-nnnn-short-lowercase-description/`. Keep primary entry
+  points, `test.py`, the case README, and VM modules at the root. Put every
+  trigger artifact under `exploit/<role>/` and complex packaging-only
+  expressions under `package/`; do not create empty placeholders.
+- Use the minimum realistic topology while preserving required service,
+  network, privilege, and trust boundaries. Give distinct deployment roles
+  such as proxies, relays, databases, and identity providers separate VMs when
+  that boundary affects the vulnerability. Keep helper machines invariant.
+- Use `testsGenerator` unless documented compatibility constraints require
+  another generator. Make VM variants explicit.
+
+### Trigger and oracle
+
+- Reuse a supplied/public PoC or upstream regression test when available.
+  Preserve attribution and the security-relevant trigger; document every
+  meaningful adaptation and safety bound. If none exists, derive only a
+  minimal trigger from authoritative vulnerability material.
+- Keep `test.py` linear and human-readable, with concise phase comments for
+  readiness, trigger execution, evidence collection, and the expected
+  vulnerable/fixed oracle. Expectations belong in `test.py`, not exploit code.
+- Apply the same bounded trigger to both variants. The vulnerable branch must
+  prove the security effect. The fixed branch must prove the effect absent and
+  the target healthy enough for comparison.
+- Use deterministic, target-unique guest markers and verify evidence at the
+  security boundary. Do not rely on command success, exploit self-reporting,
+  generic OS content, output-file existence alone, or only attacker-side
+  output when the effect occurs on another VM.
+- Finish each branch with an applicable `assertion_blocks` helper. If no helper
+  fits, use a deterministic direct assertion and explain the exception in the
+  case README.
+
+### Documentation and evidence
+
+The case README must be compact, self-contained, source-backed, and follow the
+required section order in
+[Write the case README](./docs/reporting-vulnerabilities.md#13-write-the-case-readme).
+It must record affected/fixed versions, prerequisites, topology and roles,
+pins, trigger provenance and modifications, target marker, oracle, verified
+manual and automated commands, observed results, limitations, safety notes,
+references, and LLM reproduction metadata. Do not cite another case as the
+authority for this case. Clearly label anything not run.
+
+Claims require command output or authoritative sources. Never preserve a claim
+merely because another agent wrote it.
+
+## 3. Workflow
+
+Before editing, run `git status --short`, preserve unrelated changes, and read:
+
+- [`README.md`](./README.md) and [`docs/README.md`](./docs/README.md);
+- the relevant sections of the
+  [reporting guide](./docs/reporting-vulnerabilities.md);
+- the [library reference](./docs/nice-archive-libs.md); and
+- the relevant CLI implementation and a small number of cases selected for
+  matching package type, topology, generator, pinning strategy, or oracle.
+
+Then work in this order:
+
+1. Resolve framework suitability and search for an existing case.
+2. Research affected/fixed behavior, PoC provenance, Linux applicability, and
+   verified package pins.
+3. Design the minimum topology, target-unique marker, and two-variant oracle.
+4. Implement the flake, VM modules, role-organized trigger, `test.py`, and
+   initial README.
+5. Evaluate outputs and independently confirm package versions.
+6. Start the vulnerable scenario through the NICE Archive CLI and manually
+   observe the trigger inside the isolated lab.
+7. Repeat the identical manual trigger against the fixed scenario.
+8. Encode or refine the observed flow in `test.py`.
+9. Run both complete automated variants through `nice-archive test`.
+10. Update only verified README results, clean generated artifacts, review the
+    Git index, and run `git status --short` again.
+
+Use the NICE Archive CLI from the repository root whenever it supports the
+operation. Direct Nix commands are for unsupported operations or diagnosis;
+record why they were needed and return to the CLI for final validation. The
+`test` and `scenario` commands stage the selected case for Git-backed flake
+evaluation, so always inspect the index afterward.
+
+### Subagents
+
+The main agent owns research, isolation choices, package pins, safety limits,
+watchdog decisions, documentation, and final claims. A subagent may own a
+long-running scenario or test only if the harness immediately exposes a
+detached session handle the main agent can poll and terminate. Otherwise, the
+main agent must own the managed process and may delegate only bounded work such
+as research, log analysis, or individual guest commands.
+
+When that capability gate passes, use a scenario subagent to keep
+`nice-archive scenario ... --popup false` alive and report its SSH commands;
+use VM-operator subagents for bounded guest health checks, trigger execution,
+and evidence collection; and use test-runner subagents for automated variants.
+The main agent monitors progress, compares vulnerable/fixed evidence, and
+terminates scenarios explicitly. Scenario-lock acquisition is expected output;
+it does not serialize automated tests.
+
+See [Subagent orchestration](./docs/reporting-vulnerabilities.md#subagent-orchestration)
+for the detailed roles and capability gate.
+
+If blocked, leave the most useful coherent partial implementation. Record the
+exact failing command and output, what is and is not verified, and the next
+concrete action. Never recast partial work as success.
+
+## 4. Completion checklist
 
 The task is complete only when all applicable items are true:
 
 - the case is discoverable through the NICE Archive CLI;
-- package versions and pins are independently verified;
-- the chosen vulnerable version is authoritatively confirmed as affected,
-  without requiring it to be the last affected version;
-- package pinning was preferred over whole-system pinning, and whole-system
-  pinning over old-kernel support, wherever each earlier strategy could
-  faithfully represent the target;
-- no affected-product source files, functions, snippets, or reduced
-  reimplementations are stored in the case; any source-build fallback fetches
-  complete hash-verified original upstream source through Nix;
-- manual vulnerable behavior was observed in an isolated VM;
-- manual fixed behavior was observed using the same trigger;
-- vulnerable and fixed automated tests both ran and passed;
-- ordinary commands, readiness checks, tests, and scenarios obeyed the
-  5/5/30/45-minute hard limits and the two-minute/five-minute watchdog;
-- final scenario and test validation used the NICE Archive CLI;
-- `test.py` checks the security effect with applicable assertion blocks;
-- the case root contains the primary orchestration files, exploit artifacts
-  are grouped below `exploit/<role>/`, and any complex packaging expression is
-  isolated below `package/` without vendored affected-product source;
-- `test.py` presents a straightforward workflow with concise comments that
-  identify each meaningful step's purpose and expected outcome;
-- the oracle relies on target-unique guest markers rather than only generic
-  machine behavior;
-- the README records accurate provenance, commands, results, and references;
-- the README follows the strict compact section order and contains no
-  comparisons or citations to other CVE example cases;
-- the README records LLM reproduction metadata with unavailable values clearly
-  identified;
-- the CVE work is isolated on its own working directory unless the user explicitly
-  requested otherwise;
-- no unrelated files or generated VM artifacts are included in the change.
+- authoritative evidence supports the affected range, selected vulnerable
+  version, and fix, and evaluated packages match their intended versions;
+- the narrowest faithful packaging strategy is used and no affected-product
+  source is stored in the case;
+- the topology preserves every required security boundary while omitting
+  unnecessary machines;
+- manual vulnerable and fixed behavior was observed in an isolated lab using
+  the same trigger;
+- vulnerable and fixed automated tests both ran and passed through the CLI;
+- commands, waits, tests, scenarios, and managed-session monitoring obeyed the
+  required bounds;
+- `test.py` proves the security property with target-unique guest evidence,
+  healthy fixed behavior, and applicable assertion blocks;
+- exploit artifacts, packaging expressions, and primary files follow the
+  documented layout;
+- the README follows the required compact structure and contains only verified
+  results and accurate provenance, references, safety notes, and metadata;
+- unavailable telemetry is identified rather than guessed;
+- generated artifacts and unrelated changes are absent from the final change;
+  and
+- final `git status --short` and index review have been performed.
 
-If blocked, leave the most useful coherent partial implementation possible.
-Record the exact failing command, relevant output, what has and has not been
-verified, and the next concrete action. Do not recast a partial result as
-success.
-
-## Final Report
-
-End the work with a concise report containing these fields:
-
-```text
-CVE:
-Case directory:
-Files added/changed:
-Generator used:
-VM topology:
-Vulnerable version:
-Fixed version:
-PoC or trigger:
-Oracle:
-Commands run:
-Results observed:
-Known limitations:
-Safety notes:
-References:
-```
-
-Do not ask questions that can be answered by the repository, its documentation,
-existing cases, upstream sources, or nixpkgs history.
+End with a concise report covering the CVE, case directory, changed files,
+generator and topology, vulnerable/fixed versions, trigger and oracle, commands
+run, observed results, limitations, safety notes, and references. Do not ask
+questions that the repository, documentation, authoritative sources, or
+nixpkgs history can answer.
