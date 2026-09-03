@@ -17,7 +17,8 @@ For every attempt it records:
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
-- a snapshot of changed worktree files before cleanup, when cleanup is enabled
+- a snapshot of the complete matching CVE directory before cleanup, excluding
+  generated VM images, logs, and other configured artifacts
 - OpenRouter prompt/completion/reasoning/cached token counts, provider, model, latency, and cost when an OpenRouter generation ID is available
 
 The runner does not ask the LLM to estimate its own token use. Per-CVE
@@ -108,7 +109,7 @@ Run:
 cve-orchestrator cves.txt \
   --repo /home/lundi3691/study/phd/nice-archive \
   --workers 2 \
-  --timeout-minutes 45 \
+  --timeout-minutes 120 \
   --retries 1 \
   --model deepseek/deepseek-v4-flash-0731 \
   --effort high \
@@ -131,8 +132,10 @@ workflow.
 
 Default result artifacts are written under `cves/llm-experiment-results/`.
 Per-CVE worktrees are detached at `--base-ref`, so the orchestrator does not
-create experiment branches. By default, finished non-interrupted CVE worktrees
-are snapshotted into their result directory and then removed.
+create experiment branches. All retries for one CVE reuse the same worktree.
+After the CVE succeeds or exhausts its retries, the orchestrator copies its
+complete matching case directory into the result directory and removes the
+worktree. An interrupted worktree is retained so `--resume` can continue it.
 
 ```text
 nice-archive/
@@ -184,16 +187,25 @@ Each CVE directory also contains a README handoff pair:
 `attempt-XX/opencode-env.json` records the worker environment summary,
 including the scenario lock path used for that attempt.
 
-Worktree cleanup policy is controlled by `--cleanup-worktrees`:
+Worktree cleanup policy is controlled by `--cleanup-worktrees`. Cleanup happens
+only after all attempts for that CVE have finished; retries never delete or
+recreate the worktree:
 
-- `finished` (default): snapshot and remove completed non-interrupted CVEs.
+- `finished` (default): copy the CVE directory and remove completed
+  non-interrupted CVEs, whether successful or failed.
 - `success`: cleanup only successful CVEs.
-- `always`: cleanup even interrupted CVEs.
+- `always`: cleanup every completed CVE, with the same interruption protection
+  as `finished`.
 - `never`: keep all per-CVE worktrees for debugging.
+
+Interrupted worktrees are retained under every cleanup policy. A later
+`--resume` reuses that worktree and preserves earlier attempt artifacts.
 
 Cleanup is refused when `--results` and `--worktree-root` are the same
 directory, because removing a worktree would also risk deleting the result
-artifacts. Keep these roots separate for normal batch runs.
+artifacts. It is also refused when no matching CVE case directory can be
+copied. Keep these roots separate for normal batch runs; on any snapshot or
+cleanup error, the worktree remains available for inspection.
 
 ## 5. Success/failure contract
 
@@ -261,8 +273,12 @@ Resume modes:
 - `existing`: skip any CVE that already has a `state.json`, even if the state
   cannot be parsed.
 
-Worktrees are deliberately kept so you can inspect failed runs and so a retry
-can build on the previous attempt when the resume policy allows it.
+Retries within one invocation always build on the same worktree. If the batch
+is interrupted, the worktree is kept and the default `success-only` resume mode
+continues from it. After a non-interrupted success or final failed attempt, the
+default cleanup policy copies the complete CVE directory to
+`worktree-snapshot/` and removes the worktree. Use
+`--cleanup-worktrees never` when you also want completed worktrees retained.
 
 ## 7. Live output
 
@@ -330,7 +346,7 @@ avoid placing unrelated credentials in the agent environment.
 Press Ctrl-C once to request a coordinated shutdown. The orchestrator cancels
 CVEs that have not started, sends SIGTERM to every active OpenCode process
 group, writes interrupted state/result metadata where possible, and exits with
-code 130.
+code 130. Partially completed CVE worktrees are retained for `--resume`.
 
 Press Ctrl-C a second time to force-kill active OpenCode process groups with
 SIGKILL.
@@ -344,7 +360,7 @@ head -n 1 cves.txt > one-cve.txt
 cve-orchestrator one-cve.txt \
   --repo /path/to/repo \
   --workers 1 \
-  --timeout-minutes 30 \
+  --timeout-minutes 120 \
   --retries 0 \
   --model deepseek/deepseek-v4-flash-0731
 ```
@@ -355,7 +371,7 @@ Then scale gradually:
 cve-orchestrator cves.txt \
   --repo /path/to/repo \
   --workers 3 \
-  --timeout-minutes 45 \
+  --timeout-minutes 120 \
   --retries 1 \
   --model deepseek/deepseek-v4-flash-0731 \
   --effort high \

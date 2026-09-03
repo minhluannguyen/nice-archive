@@ -57,28 +57,31 @@ If you are an LLM agent working on a new report, follow this order:
 
 1. Record the user shell and command-runner shell separately, plus UTC start
    time, model, harness, and which usage metadata the runtime exposes.
-2. Do read-only discovery first and search for an existing matching case.
+2. Do read-only discovery, resolve framework suitability, and search for an
+   existing matching case.
 3. Work only in the case directory or in the worktree assigned by the
    orchestrator. Do not create or switch Git branches unless the user or
    orchestration workflow explicitly requires it.
-4. Identify vulnerable and fixed versions.
-5. Record exploit provenance before copying or adapting exploit code.
-6. Search nixpkgs history before building vulnerable software from source.
-7. Design the VM topology and target-unique oracle markers.
-8. Decide which NICE Archive library generator fits.
-9. Implement the Nix files.
-10. Start the VM scenario with a scenario subagent only when the capability
-    gate passes; otherwise, the main agent owns the managed scenario. Use
-    standalone VMs only when scenario mode is unavailable or inappropriate.
-11. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
-    shell for manual reproduction.
-12. Translate the successful manual workflow into `test.py`.
-13. End the automated test with suitable `assertion_blocks` helpers.
-14. Run vulnerable and fixed tests with finite timeouts, preferably through
+4. Research vulnerable/fixed behavior, record exploit provenance, and select
+   verified package pins before considering a source build.
+5. Design the minimum topology, target-unique marker, two-variant oracle, and
+   appropriate generator.
+6. Implement the Nix files, role-organized trigger, initial `test.py`, and
+   initial README.
+7. Evaluate the generated outputs and independently confirm package versions.
+8. Start the vulnerable VM scenario with a scenario subagent only when the
+   capability gate passes; otherwise, the main agent owns the managed scenario.
+   Use standalone VMs only when scenario mode is unavailable or inappropriate.
+9. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
+   shell to reproduce the vulnerable behavior manually.
+10. Repeat the identical manual trigger against the fixed scenario.
+11. Refine `test.py` from the observed workflow and end each branch with a
+    suitable `assertion_blocks` helper.
+12. Run vulnerable and fixed tests with finite timeouts, preferably through
     test-runner subagents while the main agent monitors progress.
-15. Update the case README with verified commands, assertions, and LLM
+13. Update the case README with verified commands, assertions, and LLM
     reproduction metadata.
-16. Report exactly what changed and what was verified.
+14. Report exactly what changed and what was verified.
 
 ## LLM reproduction contract
 
@@ -561,10 +564,8 @@ The practical consequence is:
   expressed with current NixOS test machinery;
 - use old-kernel support when only selected machines must boot an old NixOS or
   old kernel;
-- use standalone VMs when the environment is too old or too special for the
-  modern NixOS test driver; and
-- keep old components as narrow as possible, ideally only the vulnerable target
-  machine.
+- use standalone VMs for old-kernel or old-NixOS cases where the nixpkgs
+  revision is too old to support the modern test driver.
 
 Use this decision table:
 
@@ -857,11 +858,15 @@ print(output)
 
 # Prove the vulnerable effect or its absence, then check fixed target health.
 if variant == "vulnerable":
-    ab.check_file_contains(attacker, "/tmp/result.txt", "NICE-CVE-YYYY-NNNN-FLAG")
+    ab.check_file_contains(
+        attacker, "/tmp/result.txt", "NICE-CVE-YYYY-NNNN-FLAG", timeout=90
+    )
 else:
     assert variant == "fixed", f"Unknown variant marker: {variant}"
-    ab.check_file_exists(attacker, "/tmp/result.txt", is_existing=False)
     server.succeed("systemctl is-active vulnerable-service.service", timeout=30)
+    ab.check_file_exists(
+        attacker, "/tmp/result.txt", is_existing=False, timeout=90
+    )
 ```
 
 Have the target VM plant the variant file deterministically from
@@ -936,9 +941,9 @@ command exited. The full helper list and attack-type mapping is in the
 [library reference](./nice-archive-libs.md#python-assertion-blocks).
 
 ```python
-ab.check_file_exists(server, "/tmp/important.txt")
-ab.check_file_contains(attacker, "/tmp/leak.txt", "secret")
-ab.check_root_gid(server, "newuser")
+ab.check_file_exists(server, "/tmp/important.txt", timeout=90)
+ab.check_file_contains(attacker, "/tmp/leak.txt", "secret", timeout=90)
+ab.check_root_gid(server, "newuser", timeout=90)
 ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
@@ -1028,9 +1033,9 @@ nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 ## 9. Use the CLI for testing and debugging
 
 Use the NICE Archive CLI whenever it supports the operation. Use it for case
-discovery, flake updates, scenarios, standalone VMs, and vulnerable/fixed
-tests. Do not replace supported CLI operations with guessed flake attributes,
-direct QEMU commands, or ad hoc containers.
+discovery, flake updates for flake-backed cases, scenarios, standalone VMs,
+and vulnerable/fixed tests. Do not replace supported CLI operations with
+guessed flake attributes, direct QEMU commands, or ad hoc containers.
 
 Run CLI commands from the repository root. Outside the development shell, use
 `nix run . --` followed by the same NICE Archive arguments. Direct `nix build`,
@@ -1254,9 +1259,18 @@ Recommended order:
    nice-archive list-vms --case cve-yyyy-nnnn-short-name
    ```
 
-3. Evaluate or inspect flake outputs if needed.
+3. Evaluate the flake outputs and independently confirm the selected package
+   versions.
 
-4. Run the vulnerable test with live logs:
+4. Manually run the trigger against the vulnerable scenario and record the
+   target-side oracle evidence.
+
+5. Repeat the identical trigger against the fixed scenario, confirm that the
+   effect is absent, and verify target health.
+
+6. Refine `test.py` from those observations.
+
+7. Run the vulnerable test with live logs:
 
    ```bash
    nice-archive test \
@@ -1265,7 +1279,7 @@ Recommended order:
      --log live
    ```
 
-5. Run the fixed test:
+8. Run the fixed test:
 
    ```bash
    nice-archive test \
@@ -1274,7 +1288,8 @@ Recommended order:
      --log file
    ```
 
-6. If the test fails, use the scenario helper and inspect VM state.
+9. If either automated test fails, return to scenario mode, inspect VM state,
+   refine the implementation, and rerun both affected checks.
 
 ## 13. Write the case README
 
@@ -1284,98 +1299,176 @@ README must not name, cite, compare itself with, or claim to be modeled after
 another CVE case. Describe the case using its own evidence and authoritative
 external sources.
 
-Use this required structure and section order:
+Use this required section order. The headings make reports predictable, but the
+content should read as a short technical account rather than a collection of
+forms. Prefer connected prose and short lists; reserve a table for the
+vulnerable/fixed result comparison.
 
 ````markdown
 # CVE-YYYY-NNNN: short title
 
 ## Summary
 
-| Field | Value |
-| --- | --- |
-| CVE | `CVE-YYYY-NNNN` |
-| Software | `<name>` |
-| Vulnerable version | `<version or commit>` |
-| Fixed version | `<version or commit>` |
-| Vulnerability class | `<class or CWE>` |
-| Preconditions | `<required configuration or access>` |
-| Impact | `<security effect>` |
+In two or three short paragraphs, identify the affected software, authoritative
+affected range, exact vulnerable and fixed selections used by this case,
+vulnerability class, required preconditions, and security impact.
 
-## Root cause
+## What goes wrong
 
-At most two short paragraphs describing the flawed behavior and the fix.
+Explain the flawed behavior and the fix in at most two short paragraphs. Make
+the security boundary and the difference between the selected versions clear.
 
-## Reproduction
+## How the reproduction works
 
-| Field | Value |
-| --- | --- |
-| Generator | `<NICE Archive generator>` |
-| Topology | `<each VM, service role, and communication path>` |
-| Package selection | `<pins and variants>` |
-| Trigger | `<PoC or regression trigger>` |
-| Target marker | `<target-unique guest evidence>` |
-| Oracle | `<assertion and security property>` |
+Name the generator, variants, package or system pins, and important services.
+For each affected-software variant, state how it was obtained and identify its
+actual source:
 
-## Run and results
+- **Software source:** `<historical nixpkgs package and revision>` or `<Nix
+  build from source/upstream artifact>`; include the package attribute or
+  canonical repository/registry (such as PyPI, npm, crates.io, or Maven), exact
+  version/tag/commit, artifact URL when applicable, and integrity hash.
+
+Do not describe a source build merely as “from source.” Say whether Nix fetches
+the original upstream repository, an upstream release archive, or a named
+registry package. If vulnerable and fixed variants come from different places,
+identify both and explain the difference.
+
+Then show the security-relevant flow with a numbered VM diagram:
 
 ```text
-<verified manual command>
+┌────────────────┐ [1] crafted input ┌────────────────┐ [2] request  ┌────────────────┐
+│  Attacker VM   │ ────────────────► │   Client VM    │ ───────────► │   Target VM    │
+│  PoC/logger    │ ◄──────────────── │  browser/tool  │ ◄─────────── │  service:port  │
+└────────────────┘ [4] observed      └────────────────┘ [3] response └────────────────┘
+                     effect
+```
+
+Follow the diagram with a short numbered explanation of the same steps. State
+the trigger or PoC, target-unique marker, evidence location, automated
+assertion, vulnerable expectation, and fixed expectation including target
+health.
+
+## Justification
+
+- `<unusual or nonstandard action>` — `<why the normal approach was unsuitable,
+  what evidence supports the choice, and its effect on safety or reproducibility>`
+
+Use `None. The case follows the standard workflow.` when no unusual action was
+needed.
+
+## Running the reproduction
+
+### Automated
+
+```text
 <vulnerable automated test command>
 <fixed automated test command>
 ```
 
+### Manual
+
+```text
+<verified scenario or standalone-VM command and guest trigger>
+```
+
+Say which commands were actually run. Label every unexecuted command or manual
+variant as `not run`.
+
+## Results
+
 | Variant | Expected | Observed | Status |
 | --- | --- | --- | --- |
-| Vulnerable | `<effect>` | `<actual observation>` | `<pass/fail/not run>` |
-| Fixed | `<effect absent and service healthy>` | `<actual observation>` | `<pass/fail/not run>` |
+| Vulnerable | `<security effect>` | `<actual target-side and oracle evidence>` | `<pass/fail/not run>` |
+| Fixed | `<effect absent and target healthy>` | `<actual evidence>` | `<pass/fail/not run>` |
 
-## Provenance
+Include only short evidence excerpts that materially help a reader interpret
+the result. Do not paste complete logs.
 
-| Item | Source or local change |
-| --- | --- |
-| Advisory | `<URL>` |
-| Fix or patch | `<URL/commit>` |
-| Release notes | `<URL>` |
-| PoC or regression test | `<URL and author>` |
-| Local modifications | `<concise changes>` |
-| Nixpkgs sources | `<revisions and package versions>` |
+## Sources and local adaptations
+
+- **Advisory:** `<authoritative URL>`
+- **Fix and release:** `<commit, patch, and release-note URLs>`
+- **Trigger provenance:** `<PoC or regression-test URL and author>`
+- **Software/package sources:** `<acquisition method; nixpkgs attribute and
+  revision, or canonical repository/registry and package name; exact versions,
+  tags or commits, artifact URLs, and hashes>`
+- **Local adaptations:** `<what changed and what security-relevant behavior was
+  preserved>`
 
 ## Limitations and safety
 
-- `<verified limitation, safety boundary, or None known>`
+- `<verified limitation or None known>`
+- `<isolation boundary and relevant safety restriction>`
 
 ## Reproduction metadata
 
-| Field | Value |
-| --- | --- |
-| Reproduced by | LLM agent |
-| Model | `<runtime value or not available with reason>` |
-| Agent/harness | `<tool and version or not available with reason>` |
-| Date | `<YYYY-MM-DD>` |
-| Command shell | `<bash, zsh, fish, or other>` |
-| Start time | `<UTC timestamp or not available with reason>` |
-| End time | `<UTC timestamp or not available with reason>` |
-| Elapsed time | `<measured duration or not available with reason>` |
-| Input tokens | `<runtime value or not available with reason>` |
-| Output tokens | `<runtime value or not available with reason>` |
-| Total tokens | `<runtime value or not available with reason>` |
-| Cost | `<platform value, sourced estimate, or not available with reason>` |
-| Telemetry source | `<runtime, UI, user-provided, calculated, or not exposed>` |
+<details>
+<summary>Show reproduction metadata</summary>
 
-## References
+- **Reproduced by:** `<human researcher>` or `<LLM agent>`
+- **Date:** `<YYYY-MM-DD>`
+- **Model:** `<runtime value or not available with reason>`
+- **Agent/harness:** `<tool and version or not available with reason>`
+- **User shell:** `<bash, zsh, fish, other, or not exposed>`
+- **Command-runner shell:** `<actual interpreter used by the command tool>`
+- **Start time:** `<UTC timestamp or not available with reason>`
+- **End time:** `<UTC timestamp or not available with reason>`
+- **Elapsed time:** `<measured duration or not available with reason>`
+- **Input tokens:** `<runtime value or not available with reason>`
+- **Output tokens:** `<runtime value or not available with reason>`
+- **Total tokens:** `<runtime value or not available with reason>`
+- **Cost:** `<platform value, sourced estimate, or not available with reason>`
+- **Telemetry source:** `<runtime, UI, user-provided, calculated, or not exposed>`
+
+</details>
 ````
 
-Keep the strict form compact:
+### Diagram rules
 
-- use one table for summary, reproduction, results, provenance, and metadata;
-- keep root cause to two short paragraphs;
+- Make each VM the main node and place its role and important service inside
+  its box. If an allowed container or other execution boundary is essential,
+  draw and label it explicitly instead of presenting it as a VM.
+- Number the arrows in the order the security-relevant actions occur: `[1]`,
+  `[2]`, and so on. The numbers describe the trigger and evidence flow after
+  readiness, not merely VM boot order.
+- Label each arrow with the action and include the protocol and port when they
+  matter. Arrow direction must match the real communication path in `test.py`.
+- Explain the numbered steps immediately below the diagram. Do not require the
+  reader to infer the sequence from arrow placement alone.
+- Show the fixed behavior at the step where it diverges. State which later
+  vulnerable-only steps do not occur rather than drawing a second full diagram.
+- Omit unused example nodes and arrows. One-VM cases may use a single VM box
+  with numbered local steps; simple one-VM cases do not need a diagram when a
+  sentence is clearer.
+- Do not make the host a topology node unless it genuinely participates in the
+  reproduction. Host port forwarding remains limited to standalone VMs.
+- Keep the diagram compact, plain-text, and readable in a terminal. It must
+  describe the implemented case, not an idealized deployment.
+
+### Justification rules
+
+Use `Justification` only to explain choices a reader would reasonably find
+surprising, such as a source-build fallback, whole-system pin, non-default
+generator, extra VM, forwarded host port, direct Nix command, direct assertion,
+material PoC adaptation, or incomplete manual validation. For each item, state
+what was done, why the normal workflow was unsuitable, what evidence informed
+the decision, and any safety or reproducibility consequence.
+
+Do not fill this section with routine implementation details. A justification
+does not waive an isolation rule, make an unsupported claim acceptable, or turn
+an unexecuted validation into a pass.
+
+Keep the report compact:
+
+- introduce the vulnerability as a human-readable account rather than a field
+  inventory;
 - include commands once and include only commands actually verified, marking
   unexecuted commands as `not run`;
 - use `None known` instead of filler when no limitation is known;
-- deduplicate references and include only sources directly relevant to this
-  CVE;
+- deduplicate sources and include only material directly relevant to this CVE;
 - do not add separate `Description`, `Overview`, `Assertions`, or `Interactive
-  debugging` sections when the required tables already contain that material;
+  debugging` sections when the required sections already contain that material;
 - do not include comparisons, implementation ancestry, or links to other CVE
   example cases.
 
@@ -1386,10 +1479,10 @@ Avoid making human reproduction depend on the test-driver Python prompt unless
 there is no practical alternative. Prefer scenario SSH or standalone VM shell
 commands for README instructions.
 
-Complete `Reproduction metadata` after validation. It must state that the case
-was reproduced by an LLM agent and identify the exact model and harness when
-the runtime exposes them. Record start and end timestamps so elapsed time is
-measured rather than guessed.
+Complete `Reproduction metadata` after validation. Identify whether the case
+was reproduced by a human researcher or an LLM agent. For an LLM reproduction,
+identify the exact model and harness when the runtime exposes them, and record
+start and end timestamps so elapsed time is measured rather than guessed.
 
 Token counts and cost often are not visible to the agent. Use `not available`
 with a reason such as `not exposed by harness` for unavailable fields. IDE chat
@@ -1481,9 +1574,17 @@ Before considering the report done:
 - [ ] Manual reproduction steps use scenario SSH, popup VMs, or standalone VMs.
 - [ ] Any old-kernel test uses `oldKernelTestsGenerator` unless it needs custom low-level behavior.
 - [ ] The case README explains the topology, exploit, assertions, and commands.
+- [ ] The case README states whether each affected-software variant comes from
+      nixpkgs or is built by Nix from a named upstream repository, release
+      archive, or registry package, with its exact identity, pin, and hash.
 - [ ] The case README points to `test.py` as the automated oracle.
 - [ ] The case README follows the required compact section order without
       duplicate sections or unnecessary implementation narrative.
+- [ ] A multi-VM README includes a compact VM-node diagram with numbered arrows
+      matching the trigger and evidence sequence in `test.py`.
+- [ ] The README justifies unusual or nonstandard actions, or records that the
+      standard workflow was followed; no justification is used to waive a
+      safety or validation requirement.
 - [ ] The case README does not name, cite, or compare itself with another CVE
       example case.
 - [ ] Each CVE is isolated to its case directory or orchestrator-assigned
@@ -1494,8 +1595,9 @@ Before considering the report done:
       the 5/5/30/45-minute hard limits.
 - [ ] Managed sessions are polled at least every two minutes and terminated
       after five minutes without meaningful output or a bounded response.
-- [ ] Final scenarios, standalone VMs, flake updates, and vulnerable/fixed
-      tests use the NICE Archive CLI whenever it supports the operation.
+- [ ] Final scenarios, standalone VMs, applicable flake updates, and
+      vulnerable/fixed tests use the NICE Archive CLI whenever it supports the
+      operation.
 - [ ] A subagent owns a long-running process only when the main agent receives
       a detached session handle it can poll and terminate independently.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,

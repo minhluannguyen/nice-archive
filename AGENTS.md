@@ -173,10 +173,15 @@ The case README must be compact, self-contained, source-backed, and follow the
 required section order in
 [Write the case README](./docs/reporting-vulnerabilities.md#13-write-the-case-readme).
 It must record affected/fixed versions, prerequisites, topology and roles,
-pins, trigger provenance and modifications, target marker, oracle, verified
-manual and automated commands, observed results, limitations, safety notes,
-references, and LLM reproduction metadata. Do not cite another case as the
-authority for this case. Clearly label anything not run.
+pins and the exact software acquisition source (nixpkgs, upstream repository,
+release archive, or registry), trigger provenance and modifications, target
+marker, oracle, verified manual and automated commands, observed results,
+limitations, safety notes, references, and LLM reproduction metadata. Multi-VM
+reports must include a compact diagram whose main nodes are the VMs and whose
+numbered arrows show the trigger and evidence flow. Briefly justify unusual or
+nonstandard actions; a
+justification never waives safety or validation requirements. Do not cite
+another case as the authority for this case. Clearly label anything not run.
 
 Claims require command output or authoritative sources. Never preserve a claim
 merely because another agent wrote it.
@@ -252,7 +257,7 @@ The task is complete only when all applicable items are true:
   unnecessary machines;
 - manual vulnerable and fixed behavior was observed in an isolated lab using
   the same trigger;
-- vulnerable and fixed automated tests both ran and passed through the CLI;
+- vulnerable and fixed automated tests both ran and passed;
 - commands, waits, tests, scenarios, and managed-session monitoring obeyed the
   required bounds;
 - `test.py` proves the security property with target-unique guest evidence,
@@ -260,7 +265,9 @@ The task is complete only when all applicable items are true:
 - exploit artifacts, packaging expressions, and primary files follow the
   documented layout;
 - the README follows the required compact structure and contains only verified
-  results and accurate provenance, references, safety notes, and metadata;
+  results, an accurate numbered topology flow when applicable, justified
+  nonstandard actions, and accurate provenance, references, safety notes, and
+  metadata;
 - unavailable telemetry is identified rather than guessed;
 - generated artifacts and unrelated changes are absent from the final change;
   and

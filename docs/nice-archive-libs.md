@@ -518,16 +518,21 @@ Available helpers:
 
 | Helper | Purpose |
 | --- | --- |
-| `check_service_log_contains(machine, check_message, unit, failed_message="")` | Wait for text in a systemd unit journal. |
-| `check_root_gid(machine, user)` | Check that a user has root UID and GID. |
+| `check_service_log_contains(machine, check_message, unit, failed_message="", timeout=60)` | Wait for text in a systemd unit journal. |
+| `check_root_gid(machine, user, timeout=90)` | Check that a user has root UID and GID. |
 | `check_screen_text(machine, text, timeout=60)` | Use OCR to wait for text on the VM screen. Requires `enableOCR = true`. |
 | `check_file_exists(machine, file_path, is_existing=True, timeout=90)` | Check that a path exists or remains absent. |
-| `check_file_contains(machine, file_path, content, timeout=90)` | Check that a file contains text. |
+| `check_file_contains(machine, file_path, content, timeout=90, is_existing=True)` | Check that an existing file contains or omits text. |
 | `check_file_size_equals(machine, file_path, expected_size, timeout=90)` | Check exact file size in bytes. |
-| `check_cpu_usage_high(machine, command, maximum_cpu_time_usage)` | Check that a command exceeds a CPU-time limit. |
-| `check_memory_usage_high(machine, command, maximum_memory_usage)` | Check that a command exceeds an address-space limit. |
-| `check_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5)` | Check average execution time within a tolerance. |
-| `check_core_dump_exists(machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command="")` | Find a matching systemd core dump. |
+| `check_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90)` | Check that a command exceeds a CPU-time limit. |
+| `check_memory_usage_high(machine, command, maximum_memory_usage, timeout=90)` | Check that a command exceeds an address-space limit. |
+| `check_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5, timeout=90)` | Check average execution time within a tolerance. |
+| `check_core_dump_exists(machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command="", timeout=90)` | Find a matching systemd core dump. |
+
+For `check_file_contains`, `is_existing` describes whether the content should
+be present. The file itself must exist in both modes. Each helper passes its
+`timeout` to the underlying NixOS test-driver operation; the LLM workflow's
+hard command and test limits still apply independently.
 
 ### Choosing assertion blocks by attack type
 
@@ -551,7 +556,7 @@ Use existing cases as models:
 ```python
 import assertion_blocks as ab
 
-ab.check_root_gid(server, "newuser")
+ab.check_root_gid(server, "newuser", timeout=90)
 ```
 
 ### DoS / CPU exhaustion example
@@ -567,6 +572,7 @@ ab.check_cpu_usage_high(
     client,
     command="start-client",
     maximum_cpu_time_usage="30",
+    timeout=90,
 )
 ```
 
@@ -576,20 +582,37 @@ Use both positive and negative assertions when the fixed behavior should
 preserve or reject files.
 
 ```python
+# The VM configuration plants this marker from isVulnerable.
+variant = server.succeed(
+    "cat /etc/nice-archive/cve-yyyy-nnnn-variant",
+    timeout=10,
+).strip()
 if variant == "vulnerable":
-    ab.check_file_contains(server, "/etc/passwd", "super-secret-flag-injected")
-    ab.check_file_exists(server, "/tmp/cve-xxxx-pwned", is_existing=True)
+    ab.check_file_exists(
+        server, "/tmp/cve-xxxx-pwned", is_existing=True, timeout=90
+    )
+    ab.check_file_contains(
+        server, "/etc/passwd", "super-secret-flag-injected", timeout=90
+    )
 else:
     assert variant == "fixed", f"Unknown variant marker: {variant}"
-    ab.check_file_exists(server, "/tmp/cve-xxxx-pwned", is_existing=False)
-    ab.check_file_contains(server, "/etc/passwd", "protected original")
+    ab.check_file_exists(
+        server, "/tmp/cve-xxxx-pwned", is_existing=False, timeout=90
+    )
+    ab.check_file_contains(
+        server,
+        "/etc/passwd",
+        "super-secret-flag-injected",
+        is_existing=False,
+        timeout=90,
+    )
 ```
 
 ### Information disclosure example
 
 ```python
-ab.check_file_size_equals(attacker, dump_file, dump_length)
-ab.check_file_contains(attacker, dump_file, secret_key)
+ab.check_file_size_equals(attacker, dump_file, dump_length, timeout=90)
+ab.check_file_contains(attacker, dump_file, secret_key, timeout=90)
 ```
 
 ### Crash/core-dump example
@@ -599,18 +622,20 @@ ab.check_service_log_contains(
     machine=server,
     unit="sysstatSetup.service",
     check_message="free(): double free detected",
+    timeout=60,
 )
 ab.check_core_dump_exists(
     machine=server,
     unit_name="sysstatSetup.service",
     expected_signal="ABRT",
+    timeout=90,
 )
 ```
 
 ### Graphical/OCR example
 
 ```python
-libreoffice.wait_for_x()
+libreoffice.wait_for_x(timeout=90)
 ab.check_screen_text(
     libreoffice,
     "Hello, you have been pwned!",

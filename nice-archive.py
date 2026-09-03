@@ -790,6 +790,10 @@ def run_standalone_vms():
 
 def update_flake_case(case_dir: Path) -> bool:
     """Update nix flake for a single case"""
+    if not (case_dir / "flake.nix").exists():
+        warning(f"Cannot update {case_dir.name}: update-flakes supports flake-backed cases only")
+        return False
+
     info(f"Updating nix flake for: {case_dir.name}")
     print()
     
@@ -817,7 +821,11 @@ def update_all_flakes(pause: bool = False) -> bool:
     info("Updating nix flakes for all cases...")
     print()
     
-    cases = list_case_dirs(require_nix_entry=True)
+    cases = [
+        case_dir
+        for case_dir in list_case_dirs(require_nix_entry=True)
+        if (case_dir / "flake.nix").exists()
+    ]
     failed = 0
     
     for case_dir in cases:
@@ -936,19 +944,24 @@ class TestHelpFormatter(argparse.RawDescriptionHelpFormatter):
             return "MODE [FILE]"
         return super()._format_args(action, default_metavar)
 
-def add_case_args(parser: argparse.ArgumentParser, include_all: bool = False):
+def add_case_args(
+    parser: argparse.ArgumentParser,
+    include_all: bool = False,
+    case_help: str = "case name or path, for example cve-2016-5195-dirty-cow",
+    all_help: str = "apply the command to all valid CVE cases",
+):
     """Add case selection options to a command parser."""
     parser.add_argument(
         "--case",
         dest="case_name",
-        help="case name or path, for example cve-2016-5195-dirty-cow",
+        help=case_help,
     )
 
     if include_all:
         parser.add_argument(
             "--all",
             action="store_true",
-            help="apply the command to all valid CVE cases",
+            help=all_help,
         )
     else:
         parser.set_defaults(all=False)
@@ -1085,11 +1098,26 @@ tests use live logging and all-case runs suppress test output.""",
         "update-flakes",
         aliases=["update"],
         help="update flake.lock files",
-        description="Update flake.lock for one CVE case or all CVE cases.",
+        description=(
+            "Update flake.lock for one flake-backed CVE case or all "
+            "flake-backed cases."
+        ),
     )
-    add_case_args(update_parser, include_all=True)
+    add_case_args(
+        update_parser,
+        include_all=True,
+        case_help=(
+            "flake-backed case name or path, for example "
+            "cve-2020-7247-opensmtpd"
+        ),
+        all_help="apply the command to all flake-backed CVE cases",
+    )
     add_no_prompt_arg(update_parser)
-    update_parser.set_defaults(action="update_flakes", print_help_when_empty=True, command_parser=update_parser)
+    update_parser.set_defaults(
+        action="update_flakes",
+        print_help_when_empty=True,
+        command_parser=update_parser,
+    )
 
     return parser
 
