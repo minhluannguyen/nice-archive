@@ -6,12 +6,14 @@ These functions assume they're running within a NixOS test environment
 where machine objects have methods like succeed(), execute(), wait_for_file(), etc.
 """
 
-import inspect
 import json
+import shlex
 import time
 
 
-def check_service_log_contains(machine, check_message, unit, failed_message=""):
+def check_service_log_contains(
+    machine, check_message, unit, failed_message="", timeout=60
+):
     """Check if a service's journalctl log contains a specific message."""
     print("ASSERTION BLOCK: check_service_log_contains")
     failed_msg_display = (
@@ -22,16 +24,16 @@ def check_service_log_contains(machine, check_message, unit, failed_message=""):
 
     stdout = machine.wait_until_succeeds(
         f'journalctl -u {unit} --no-pager | grep "{check_message}" -A 10 -B 10 --color',
-        timeout=60
+        timeout=timeout,
     )
     print(stdout)
     assert f"{check_message}" in stdout, failed_msg_display
 
 
-def check_root_gid(machine, user):
+def check_root_gid(machine, user, timeout=90):
     """Check if a user has root privileges."""
     print("ASSERTION BLOCK: check_root_gid")
-    stdout = machine.succeed(f"su - {user} -c 'id'")
+    stdout = machine.succeed(f"su - {shlex.quote(user)} -c 'id'", timeout=timeout)
     print(stdout)
     assert (
         (f"uid=0({user})" in stdout or "uid=0(root)" in stdout)
@@ -52,74 +54,85 @@ def check_file_exists(machine, file_path, is_existing=True, timeout=90):
         f"{'present' if is_existing else 'absent'})"
     )
 
+    quoted_path = shlex.quote(file_path)
     if is_existing:
-        sig = inspect.signature(machine.wait_for_file)
-        if "timeout" in sig.parameters:
-            machine.wait_for_file(file_path, timeout)
-        else:
-            print("Warning: wait_for_file does not support timeout parameter in this tester version.")
-            machine.wait_for_file(file_path)
+        machine.wait_for_file(file_path, timeout=timeout)
     else:
-        machine.wait_until_succeeds(f"test ! -e {file_path}", timeout=timeout)
+        machine.wait_until_succeeds(f"test ! -e {quoted_path}", timeout=timeout)
 
 
-def check_file_contains(machine, file_path, content, timeout=90):
-    """Check if a file contains specific content."""
-    print("ASSERTION BLOCK: check_file_contains")
+def check_file_contains(machine, file_path, content, timeout=90, is_existing=True):
+    """Check whether an existing file contains or omits specific content."""
+    print(
+        f"ASSERTION BLOCK: check_file_contains (expecting content to be "
+        f"{'present' if is_existing else 'absent'})"
+    )
 
-    sig = inspect.signature(machine.wait_for_file)
-    if "timeout" in sig.parameters:
-        machine.wait_for_file(file_path, timeout)
-    else:
-        print("Warning: wait_for_file does not support timeout parameter in this tester version.")
-        machine.wait_for_file(file_path)
-
-    stdout = machine.succeed(f"cat {file_path}")
+    machine.wait_for_file(file_path, timeout=timeout)
+    stdout = machine.succeed(f"cat {shlex.quote(file_path)}", timeout=timeout)
     print(stdout)
-    assert f"{content}" in stdout, f"File {file_path} does not contain expected content: {content}"
+    contains_content = f"{content}" in stdout
+    assert contains_content == is_existing, (
+        f"File {file_path} "
+        f"{'does not contain expected' if is_existing else 'contains unexpected'} "
+        f"content: {content}"
+    )
 
 
 def check_file_size_equals(machine, file_path, expected_size, timeout=90):
     """Check if a file has the expected size in bytes."""
     print("ASSERTION BLOCK: check_file_size_equals")
 
-    sig = inspect.signature(machine.wait_for_file)
-    if "timeout" in sig.parameters:
-        machine.wait_for_file(file_path, timeout)
-    else:
-        print("Warning: wait_for_file does not support timeout parameter in this tester version.")
-        machine.wait_for_file(file_path)
-
-    stdout = machine.succeed(f"stat -c%s {file_path}")
+    machine.wait_for_file(file_path, timeout=timeout)
+    stdout = machine.succeed(
+        f"stat -c%s {shlex.quote(file_path)}",
+        timeout=timeout,
+    )
     print(stdout)
     actual_size = int(stdout.strip())
-    assert actual_size == expected_size, f"File size of {file_path} is {actual_size}, expected {expected_size}"
+    assert actual_size == expected_size, (
+        f"File size of {file_path} is {actual_size}, expected {expected_size}"
+    )
 
 
-def check_cpu_usage_high(machine, command, maximum_cpu_time_usage):
+def check_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90):
     """Check if a command exceeds maximum CPU time usage."""
     print("ASSERTION BLOCK: check_cpu_usage_high")
-    res = machine.execute("prlimit --cpu=" + maximum_cpu_time_usage + " " + command)
+    res = machine.execute(
+        "prlimit --cpu=" + maximum_cpu_time_usage + " " + command,
+        timeout=timeout,
+    )
     print(res)
-    assert res[0] in (152, 137), f"Maximum CPU time usage might not exceeded, unexpected status {res[0]}: {res[1]}"
+    assert res[0] in (152, 137), (
+        f"Maximum CPU time usage might not be exceeded; "
+        f"unexpected status {res[0]}: {res[1]}"
+    )
 
 
-def check_memory_usage_high(machine, command, maximum_memory_usage):
+def check_memory_usage_high(machine, command, maximum_memory_usage, timeout=90):
     """Check if a command exceeds maximum memory usage."""
     print("ASSERTION BLOCK: check_memory_usage_high")
-    res = machine.execute("prlimit --as=" + maximum_memory_usage + " " + command)
+    res = machine.execute(
+        "prlimit --as=" + maximum_memory_usage + " " + command,
+        timeout=timeout,
+    )
     print(res)
-    assert res[0] in (27, 139), f"Maximum memory usage might not exceeded, unexpected status {res[0]}: {res[1]}"
+    assert res[0] in (27, 139), (
+        f"Maximum memory usage might not be exceeded; "
+        f"unexpected status {res[0]}: {res[1]}"
+    )
 
 
-def check_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5):
+def check_exact_execution_time(
+    machine, command, expected_time, repeats=5, tolerance=0.5, timeout=90
+):
     """Check if a command executes within expected time frame."""
     print("ASSERTION BLOCK: check_exact_execution_time")
 
     times = []
     for _ in range(repeats):
         start_time = time.time()
-        machine.succeed(command)
+        machine.succeed(command, timeout=timeout)
         end_time = time.time()
         times.append(end_time - start_time)
 
@@ -127,17 +140,30 @@ def check_exact_execution_time(machine, command, expected_time, repeats=5, toler
     print(f"Average execution time: {avg_time} seconds")
     assert (
         abs(avg_time - expected_time) <= tolerance
-    ), f"Execution time {avg_time} not within expected range of {expected_time} ± {tolerance} seconds"
+    ), (
+        f"Execution time {avg_time} not within expected range of "
+        f"{expected_time} ± {tolerance} seconds"
+    )
 
 
 def check_core_dump_exists(
-    machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command=""
+    machine,
+    unit_name="backdoor.service",
+    expected_signal=None,
+    repeats=10,
+    repeat_command="",
+    timeout=90,
 ):
     """Check if a core dump exists for a specific unit with expected signal."""
     print("ASSERTION BLOCK: check_core_dump_exists")
 
-    def _check_core_dump_exists_internal(machine, unit_name, expected_signal, repeats, repeat_command):
-        list_coredumpctl = machine.execute("coredumpctl list --no-pager --no-legend  --json=short")
+    def _check_core_dump_exists_internal(
+        machine, unit_name, expected_signal, repeats, repeat_command
+    ):
+        list_coredumpctl = machine.execute(
+            "coredumpctl list --no-pager --no-legend --json=short",
+            timeout=timeout,
+        )
         print(list_coredumpctl[1])
         if list_coredumpctl[0] != 0:
             raise AssertionError(f"Error executing coredumpctl: {list_coredumpctl[1]}")
@@ -151,19 +177,26 @@ def check_core_dump_exists(
         for item in coredump_items:
             if "pid" in item:
                 pid = item["pid"]
-                dumped_info = machine.execute(f"coredumpctl info {pid} --no-pager 2>/dev/null | head -n 20")
+                dumped_info = machine.execute(
+                    f"coredumpctl info {pid} --no-pager 2>/dev/null | head -n 20",
+                    timeout=timeout,
+                )
                 print(dumped_info[1])
-                if f"Unit: {unit_name}" in dumped_info[1] and (
+                signal_matches = expected_signal is None or (
                     f"Signal: {expected_signal_str}" in dumped_info[1]
                     or f"({expected_signal_str})" in dumped_info[1]
-                ):
+                )
+                if f"Unit: {unit_name}" in dumped_info[1] and signal_matches:
                     break
                 else:
                     pid = None
 
         assert (
             pid is not None
-        ), f"No core dumps found on the machine for unit {unit_name} with signal {expected_signal_str}"
+        ), (
+            f"No core dumps found on the machine for unit {unit_name} "
+            f"with signal {expected_signal_str}"
+        )
         signal_info = dumped_info[1].split("Signal:")[1].split("\n")[0].strip()
         print(f"Core dump found for unit {unit_name} with signal {signal_info}")
 
@@ -172,23 +205,34 @@ def check_core_dump_exists(
     def _wait_for_core_dump(machine, unit_name, expected_signal, repeats, repeat_command):
         if repeat_command:
             print(f"Initial command to trigger the core dump: {repeat_command}")
-            machine.execute(repeat_command)
+            machine.execute(repeat_command, timeout=timeout)
             for attempt in range(repeats):
                 try:
                     print(f"Checking for core dump, attempt {attempt + 1}/{repeats}...")
-                    _check_core_dump_exists_internal(machine, unit_name, expected_signal, repeats, repeat_command)
+                    _check_core_dump_exists_internal(
+                        machine,
+                        unit_name,
+                        expected_signal,
+                        repeats,
+                        repeat_command,
+                    )
                     return
                 except AssertionError as e:
                     print(str(e))
                     if repeat_command:
                         print(f"Executing repeat command: {repeat_command}")
-                        machine.execute(repeat_command)
+                        machine.execute(repeat_command, timeout=timeout)
                     time.sleep(5)
         else:
-            _check_core_dump_exists_internal(machine, unit_name, expected_signal, repeats, repeat_command)
+            _check_core_dump_exists_internal(
+                machine, unit_name, expected_signal, repeats, repeat_command
+            )
             return
         assert (
             False
-        ), f"Core dump with signal {expected_signal} for unit {unit_name} not found after {repeats} attempts"
+        ), (
+            f"Core dump with signal {expected_signal} for unit {unit_name} "
+            f"not found after {repeats} attempts"
+        )
 
     _wait_for_core_dump(machine, unit_name, expected_signal, repeats, repeat_command)

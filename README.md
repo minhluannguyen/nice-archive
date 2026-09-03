@@ -144,6 +144,8 @@ when required values are missing.
 
 ### Update flake locks
 
+This command applies to flake-backed cases only.
+
 ```bash
 nice-archive update-flakes --case cve-2025-32463-chwoot
 nice-archive update-flakes --all
@@ -151,7 +153,7 @@ nice-archive update-flakes --all
 
 ## Interactive helper
 
-The interactive helper can be started with `nice-archive start`;
+The interactive helper can be started with `nice-archive start`.
 
 ### Menu helper
 
@@ -189,12 +191,13 @@ The scenario helper is the preferred debugging interface for multi-VM tests:
 
 ```bash
 nice-archive scenario \
-  --case cve-2025-32463-chwoot \
+  --case cve-2020-7247-opensmtpd \
   --vulnerable true \
-  --popup false
+  --popup true
 ```
 
-This will run the interactive mode of the NixOS test driver and automatically start the VMs. After the VMs are running, some VM windows will be opened for the user to interact with the VMs.
+This runs the interactive NixOS test driver and starts the VMs. With
+`--popup true`, terminal windows open for interacting with the VMs.
 
 The user can also interact with the VMs through the test driver terminal. Some common commands are:
 
@@ -250,7 +253,6 @@ If an output name fails, inspect the case's `flake.nix` or use the CLI first.
 - [Documentation index](./docs/README.md)
 - [NICE Archive library reference](./docs/nice-archive-libs.md)
 - [Reporting a vulnerability with NICE Archive](./docs/reporting-vulnerabilities.md)
-- [LLM CVE reproduction prompt](./docs/LLM-reproduction-prompt.md)
 
 The library reference documents `testsGenerator`, `standaloneVMGenerator`,
 `oldKernelTestsGenerator`, graphical/OCR flags, old-kernel compatibility, and
@@ -262,49 +264,16 @@ case.
 ## Agent-based CVE reproduction
 
 This repository includes [`AGENTS.md`](./AGENTS.md) as the concise operating
-contract for coding agents; the detailed procedures live in the
-[reporting guide](./docs/reporting-vulnerabilities.md). A request such as
-`Reproduce CVE-YYYY-NNNN` instructs an
-agent to research the vulnerability, create or complete its case under
-`cves/`, reproduce it manually in an isolated VM, and verify both vulnerable
-and fixed variants with a machine-checkable oracle. Additional details or a
-preferred PoC can be supplied in the same request.
+contract for coding agents. A request such as `Reproduce CVE-YYYY-NNNN` asks an
+agent to research the vulnerability, build or complete its isolated case, and
+prove vulnerable and fixed behavior with manual observations and automated
+oracles.
 
-The contract also makes the agent identify its command shell before
-exploration, isolate changes to the case directory or assigned worktree, reuse
-or source a PoC from authoritative material, plant target-unique markers for
-the oracle, bound potentially blocking operations, and record model, harness,
-elapsed time, token usage, and cost in the completed case README. Unavailable
-runtime metadata must be labeled rather than estimated, and missing per-run
-telemetry does not block completion.
-
-Generated case READMEs follow a compact required section order and describe
-their own evidence directly. They do not compare themselves with or cite other
-CVE example cases.
-
-Case topologies use the minimum realistic set of VMs. Required deployment
-boundaries remain separate, such as a proxy VM in front of a backend VM, while
-machines without an independent security role are omitted.
-
-Agent-run commands use hard limits: 5 minutes for ordinary commands and VM
-readiness, 30 minutes for a complete NixOS test, and 45 minutes for an
-interactive scenario. Managed sessions are polled every two minutes and stop
-after five minutes without meaningful progress. Agents use the NICE Archive
-CLI whenever it supports the required operation.
-
-When an agent harness supports subagents, the workflow asks the main agent to
-orchestrate scenario and test helpers: a scenario subagent keeps
-`nice-archive scenario` running, VM-operator subagents SSH into the printed VM
-commands to run bounded guest-side exploit steps, and test-runner subagents run
-long automated tests while the main agent monitors for stuck execution.
-Concurrent scenario commands wait on the scenario lock; this is expected and
-prevents scenario-mode VM labs from blocking each other. Tests remain parallel.
-
-Shell detection and isolation are hard gates: agents must not run compound
-shell syntax before identifying the command interpreter, and must never execute
-vulnerable software or PoCs directly in the current session. `nix develop` and
-`nix-shell` provide dependencies but are not security boundaries; triggers must
-run in an appropriate VM or container.
+The contract defines the safety gates, shell and timeout rules, required
+evidence, validation sequence, and optional subagent roles. Detailed procedures
+and technical examples live in the
+[reporting guide](./docs/reporting-vulnerabilities.md) and
+[library reference](./docs/nice-archive-libs.md).
 
 ## Cleaning generated artifacts
 
