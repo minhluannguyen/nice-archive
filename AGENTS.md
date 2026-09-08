@@ -145,7 +145,13 @@ for search commands, pinning patterns, and generator selection.
   such as proxies, relays, databases, and identity providers separate VMs when
   that boundary affects the vulnerability. Keep helper machines invariant.
 - Use `testsGenerator` unless documented compatibility constraints require
-  another generator. Make VM variants explicit.
+  another generator. It already provides interactive scenarios; check scenario
+  mode before adding `standaloneVMGenerator`, and add it only when scenarios
+  cannot run the required lab. Document the failure or verified constraint.
+  Make VM variants explicit.
+- Discover NixOS options with `nixos-option`, record the queried release and
+  revision, and verify applicability to the VM's module-system pin; see
+  [option discovery](./docs/reporting-vulnerabilities.md#searching-for-nixos-options).
 
 ### Trigger and oracle
 
@@ -156,6 +162,9 @@ for search commands, pinning patterns, and generator selection.
 - Keep `test.py` linear and human-readable, with concise phase comments for
   readiness, trigger execution, evidence collection, and the expected
   vulnerable/fixed oracle. Expectations belong in `test.py`, not exploit code.
+  Keep readiness checks minimal; use DNS/connectivity probes only when needed.
+  Reuse existing oracle evidence for fixed-target health, adding a separate
+  benign check only when that evidence is insufficient.
 - Apply the same bounded trigger to both variants. The vulnerable branch must
   prove the security effect. The fixed branch must prove the effect absent and
   the target healthy enough for comparison.
@@ -174,7 +183,8 @@ required section order in
 [Write the case README](./docs/reporting-vulnerabilities.md#13-write-the-case-readme).
 It must record affected/fixed versions, prerequisites, topology and roles,
 pins and the exact software acquisition source (nixpkgs, upstream repository,
-release archive, or registry), trigger provenance and modifications, target
+release archive, or registry) and a brief reason for the packaging method,
+trigger provenance and modifications, target
 marker, oracle, verified manual and automated commands, observed results,
 limitations, safety notes, references, and LLM reproduction metadata. Multi-VM
 reports must include a compact diagram whose main nodes are the VMs and whose
