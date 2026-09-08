@@ -71,7 +71,7 @@ If you are an LLM agent working on a new report, follow this order:
 7. Evaluate the generated outputs and independently confirm package versions.
 8. Start the vulnerable VM scenario with a scenario subagent only when the
    capability gate passes; otherwise, the main agent owns the managed scenario.
-   Use standalone VMs only when scenario mode is unavailable or inappropriate.
+   Use standalone VMs only after confirming scenario mode cannot run the lab.
 9. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
    shell to reproduce the vulnerable behavior manually.
 10. Repeat the identical manual trigger against the fixed scenario.
@@ -110,8 +110,8 @@ requirements:
   scenario mode running and VM-operator subagents to SSH into generated VMs and
   simulate the exploit from inside the lab. Otherwise, the main agent owns the
   managed scenario.
-- Use standalone VMs for manual validation when the NixOS test driver is not a
-  good fit.
+- Add standalone VMs only after checking that scenario mode cannot run the lab;
+  record the failed attempt or verified compatibility constraint.
 - Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
 - Reuse and adapt an existing PoC when available. If none exists, derive a
   minimal trigger from authoritative CVE material instead of inventing an
@@ -510,6 +510,42 @@ Keep package-selection logic close to the VM that needs it. Avoid moving
 user-space package selection into the top-level `flake.nix` unless the whole
 system pin must change.
 
+### Searching for NixOS options
+
+Use `nixos-option` to discover service options before writing custom module
+settings. First identify the release and revision of the configuration being
+queried:
+
+```bash
+nixos-option system.nixos.release
+nixos-option system.nixos.revision
+```
+
+Record these alongside the lookup: option names, types, defaults, and behavior
+can differ between nixpkgs/NixOS versions. Then inspect the service:
+
+```bash
+nixos-option services.nginx
+nixos-option services.nginx.enable
+```
+
+The first command lists the options under `services.nginx`. The second shows
+the option's value, default, type, description, and declaring module. Both
+commands were verified; `enable` is a boolean with default `false`.
+
+These queries inspect the local NixOS configuration, not automatically the
+case's flake. The verified lookup used NixOS `26.05`, revision
+`a3116115851d68b8952a2a4221cc25a84e56b532`; this is an example, not a required pin.
+If revision metadata is unavailable, record that and obtain the pin from the
+queried configuration's lock file or source reference instead of guessing.
+
+Compare the queried revision with the VM's actual module-system pin. If they
+differ, inspect the option at the VM's revision and evaluate the case
+configuration before using it; a current option is not proof that an older
+module supports it. A historical package pin alone does not change the
+available NixOS options. Use `nixos-option --help` for selecting another
+configuration.
+
 ## 3. Choose the VM topology
 
 Most cases fit one of these shapes (but some exploits need more complex topologies, so feel free to adapt):
@@ -573,16 +609,24 @@ Use this decision table:
 | --- | --- |
 | Normal package-level vulnerability | `testsGenerator` |
 | Vulnerable/fixed full system must come from different nixpkgs pins | `testsGenerator` with `variant = "system"` |
-| Modern test exists, but humans also need direct/manual VMs | Add `standaloneVMGenerator` |
+| Scenario mode cannot run the required lab, confirmed by a failed attempt or verified compatibility constraint | Add `standaloneVMGenerator` only for that fallback |
 | One or a few VMs must boot an old kernel / old NixOS while the test driver can stay modern | `oldKernelTestsGenerator` |
 | You need custom low-level old-kernel patching | `oldKernelNixosTest` |
 | The whole reproduction is too old for modern NixOS tests | `default.nix`, `npins`, and standalone/manual VMs |
 
 Most new reports should start with `testsGenerator`.
 
+It already generates scenarios that start the VMs and provide manual access.
+Check the generated scenario outputs and try scenario mode before adding
+standalone VMs. If outputs are missing, first check whether
+`generateInteractiveTests` was disabled. A known, verified incompatibility can
+establish that fallback without repeating a failing launch; record the evidence
+in the case README. Do not add both generators by default or to bypass a
+fixable configuration error or scenario-lock wait.
+
 When using old-kernel support, prioritize replacing only the vulnerable
-target. If many machines must be old at the same time, the standalone/manual
-path is usually easier to debug and document.
+target. Even when several machines need historical systems, check scenario
+compatibility before selecting the standalone/manual fallback.
 
 ## 5. Write `flake.nix`
 
@@ -839,9 +883,7 @@ import assertion_blocks as ab
 
 start_all()
 
-# Wait for the target service; the trigger requires a reachable server.
-server.wait_for_unit("multi-user.target", timeout=120)
-server.wait_for_unit("vulnerable-service.service", timeout=120)
+# Wait for the prerequisite the trigger actually needs.
 server.wait_for_open_port(8080, timeout=60)
 variant = server.succeed(
     "cat /etc/nice-archive/cve-yyyy-nnnn-variant",
@@ -849,7 +891,6 @@ variant = server.succeed(
 ).strip()
 
 # Run the same bounded trigger in both variants and collect its evidence.
-attacker.wait_for_unit("multi-user.target", timeout=120)
 status, output = attacker.execute(
     "run-exploit http://server:8080",
     timeout=30,
@@ -947,11 +988,27 @@ ab.check_root_gid(server, "newuser", timeout=90)
 ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
-Some important points:
+### Keep tests concise and declarative
 
-- The test is also a list of steps for a human to reproduce the exploit
-  manually. Keep it readable and avoid unnecessarily complex Python.
-- The test should handle both vulnerable and fixed variants.
+Write a short, linear reproduction: necessary readiness, the trigger, and
+security assertions for each variant. Use direct test-driver methods and brief
+phase comments; avoid generic test utilities and repeated status dumps.
+
+- Wait for the prerequisite the next step needs: a port, unit, file, or
+  application response. Do not routinely stack all of these checks. Add an
+  application-readiness wait when service initialization is asynchronous.
+- `getent`, ping, and extra connection probes are diagnostic tools, not a
+  required preamble. Keep them only when a specific communication dependency
+  makes them necessary. Collect extra diagnostics in scenario mode or on failure.
+- Reuse trigger or oracle evidence that establishes fixed-target health, such
+  as a valid application rejection or successful normal operation. Add one
+  bounded benign check only if needed. An absent marker, connection failure,
+  or timeout alone does not prove the target is functional.
+- Preserve the same trigger, required security boundaries, and meaningful
+  vulnerable/fixed assertions when simplifying the sequence.
+
+The managed-session watchdog and its progress checks still apply while running
+tests and scenarios.
 
 ### Bound waits and blocking triggers
 
@@ -988,10 +1045,13 @@ still apply and may terminate an operation earlier. On timeout, collect
 diagnostics and fail clearly; never count a timeout alone as a passing fixed
 result.
 
-## 8. Add standalone VMs when useful
+## 8. Add standalone VMs only when scenario mode cannot work
 
-Standalone VMs are for manual reproduction and debugging. Add them only when a
-human benefits from opening a machine outside the test driver or the test driver is not compatible with the vulnerable environment.
+Use the scenarios generated by `testsGenerator` for manual reproduction and
+debugging first. Add standalone outputs only after checking that scenario mode
+cannot run the required lab. Record the failed command or verified
+compatibility constraint and why standalone VMs resolve it. The following
+combined output is a fallback example, not the default case template.
 
 ```nix
 nice-archive-lib.testsGenerator {
@@ -1177,10 +1237,10 @@ recorded.
 
 ### Path B: run standalone VMs manually
 
-Use this path when the vulnerability is too old or too awkward for the modern
-NixOS test driver, or when the report needs manual VM terminals. This is common
-for old Nixpkgs revisions that do not have NixOS Tests or advanced test-driver
-features.
+Use this path only after checking that scenario mode cannot run the required
+lab, for example because a historical environment is incompatible with the
+test driver. Manual VM terminals are already available through scenario mode.
+Record the failed attempt or verified compatibility constraint in the README.
 
 Expose standalone VMs with `standaloneVMGenerator`, then list them:
 
@@ -1333,6 +1393,11 @@ Do not describe a source build merely as “from source.” Say whether Nix fetc
 the original upstream repository, an upstream release archive, or a named
 registry package. If vulnerable and fixed variants come from different places,
 identify both and explain the difference.
+
+Explain the package choice in one or two sentences: why this acquisition
+method fits the required versions and environment. For a source build or other
+fallback, name the concrete limitation of the earlier packaging options. Keep
+exact source details in `Sources and local adaptations` without repeating them.
 
 Then show the security-relevant flow with a numbered VM diagram:
 
@@ -1564,6 +1629,8 @@ Before considering the report done:
 - [ ] Existing PoC or regression-test material was reused or adapted when
       available; any derived trigger cites its authoritative basis.
 - [ ] `flake.nix` uses the appropriate generator.
+- [ ] Standalone outputs are added only after checking scenario mode and
+      recording why it cannot run the required lab.
 - [ ] VM names are clear and match variables in `test.py`.
 - [ ] The topology is the minimum realistic model: required service and trust
       boundaries use separate VMs, while unnecessary helper VMs are omitted.
@@ -1578,6 +1645,7 @@ Before considering the report done:
       nixpkgs or is built by Nix from a named upstream repository, release
       archive, or registry package, with its exact identity, pin, and hash.
 - [ ] The case README points to `test.py` as the automated oracle.
+- [ ] The README briefly explains why each packaging method was selected.
 - [ ] The case README follows the required compact section order without
       duplicate sections or unnecessary implementation narrative.
 - [ ] A multi-VM README includes a compact VM-node diagram with numbered arrows

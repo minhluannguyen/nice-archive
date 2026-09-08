@@ -270,8 +270,11 @@ ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 
 ## `standaloneVMGenerator`
 
-Use `standaloneVMGenerator` when a case should expose manually runnable VMs in
-addition to automated tests.
+`testsGenerator` already generates interactive scenarios that start the VMs.
+Check those scenarios first. Add `standaloneVMGenerator` only when scenario mode
+cannot run the required lab; record the failed scenario command or verified
+compatibility constraint in the case README. Manual access alone is not a
+reason to add standalone outputs.
 
 ### Syntax
 
@@ -327,7 +330,9 @@ standaloneVMs.server-fixed
 
 ## Combining tests and standalone VMs
 
-Use Nix attribute-set merging:
+Use this combination only after confirming the scenario limitation described
+above. Tests with working scenario mode normally need only `testsGenerator`.
+When standalone outputs are necessary, use Nix attribute-set merging:
 
 ```nix
 outputs = { nixpkgs, nice-archive-lib, ... }:
