@@ -198,6 +198,8 @@ nice-archive scenario \
 
 This runs the interactive NixOS test driver and starts the VMs. With
 `--popup true`, terminal windows open for interacting with the VMs.
+`--popup false` disables SSH terminal windows. QEMU graphics are controlled
+separately by the case's `isGraphics`/`oldKernelGraphics` settings.
 
 The user can also interact with the VMs through the test driver terminal. Some common commands are:
 
