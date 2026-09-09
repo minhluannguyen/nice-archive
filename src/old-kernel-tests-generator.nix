@@ -84,7 +84,7 @@ let
       oldKernelIsGraphics =
         if value ? oldKernelGraphics then value.oldKernelGraphics
         else if value ? isGraphics then value.isGraphics
-        else isInteractive;
+        else false;
     in
       import "${oldNixpkgs}/nixos" {
         configuration = import ./vm-configs/vm-template-instance.nix {

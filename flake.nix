@@ -39,6 +39,7 @@
             nix
             openssh
             terminator
+            xterm
           ];
 
           runtimePath = pkgs.lib.makeBinPath runtimePackages;

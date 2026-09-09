@@ -541,11 +541,83 @@ def read_until_clean(child, needle: str, timeout: float = 120.0) -> str:
     raise TimeoutError(f"Did not see cleaned text: {needle!r}")
 
 # Start interactive scenario section
+def verify_ssh_access(name: str, command: str, attempts: int = 5) -> bool:
+    """Confirm that the test driver's advertised SSH route reaches the guest."""
+    ssh_args = shlex.split(command)
+    probe_args = [
+        ssh_args[0],
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=3",
+        *ssh_args[1:],
+        "true",
+    ]
+    last_error = ""
+    for attempt in range(attempts):
+        try:
+            probe = subprocess.run(
+                probe_args,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_error = str(exc)
+        else:
+            if probe.returncode == 0:
+                success(f"Verified SSH access to {name}.")
+                return True
+            last_error = probe.stderr.strip() or f"ssh exited with status {probe.returncode}"
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    warning(f"SSH access to {name} failed: {last_error}")
+    return False
+
+
+def launch_ssh_popup(name: str, command: str, case_dir: Path, terminal: str = "terminator") -> bool:
+    """Start an independent terminal and report early failures, with a GTK-free fallback."""
+    ssh_args = shlex.split(command)
+    candidates = [terminal] + (["xterm"] if terminal == "terminator" else [])
+    for candidate in candidates:
+        if candidate == "terminator":
+            # Do not hand the request to an existing desktop Terminator process:
+            # it can use a different Nix/GTK closure or disappear after a crash.
+            argv = ["terminator", "--no-dbus", "-T", name, "-x", *ssh_args]
+            popup_env = os.environ.copy()
+            # A terminal from this flake may use a different GTK/GLib closure
+            # than the desktop's Fcitx module. Use GTK's built-in input method
+            # so that incompatible host modules are not loaded into Terminator.
+            popup_env["GTK_IM_MODULE"] = "gtk-im-context-simple"
+            popup_env.pop("GTK_PATH", None)
+        else:
+            # Nix's xterm closure may not include the legacy "fixed" bitmap
+            # font. Xft/fontconfig provides this portable monospace face.
+            argv = ["xterm", "-fa", "monospace", "-fs", "10", "-T", name, "-e", *ssh_args]
+            popup_env = os.environ.copy()
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=case_dir,
+                env=popup_env,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            warning(f"Could not start {candidate} for {name}: {exc}")
+            continue
+        try:
+            status = process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            return True
+        warning(f"{candidate} for {name} exited during startup (status {status}).")
+    warning(f"No SSH window opened for {name}; use the printed SSH command manually.")
+    return False
+
+
 def start_scenario_case(
     case_dir: Path,
     isVulnerable: bool = True,
     system: str = systemStr,
     popup: bool = True,
+    terminal: str = "terminator",
 ) -> bool:
     with scenario_lock():
         return start_scenario_case_unlocked(
@@ -553,6 +625,7 @@ def start_scenario_case(
             isVulnerable=isVulnerable,
             system=system,
             popup=popup,
+            terminal=terminal,
         )
 
 def start_scenario_case_unlocked(
@@ -560,6 +633,7 @@ def start_scenario_case_unlocked(
     isVulnerable: bool = True,
     system: str = systemStr,
     popup: bool = True,
+    terminal: str = "terminator",
 ) -> bool:
     """Start scenario for a single case."""
     info("Starting scenario for a report case...")
@@ -610,16 +684,17 @@ def start_scenario_case_unlocked(
 
         time.sleep(2)  # Give the child process time to settle before launching terminals.
 
+        ssh_ready = {
+            name: verify_ssh_access(name, cmd)
+            for name, cmd in ssh_commands.items()
+        }
+
         if popup:
             for name, cmd in ssh_commands.items():
-                try:
-                    subprocess.Popen(
-                        ["terminator", "-T", name, "-e", cmd],
-                        cwd=case_dir,
-                    )
-                except FileNotFoundError:
-                    warning("terminator is not available; use the SSH commands below manually.")
-                    break
+                if not ssh_ready[name]:
+                    warning(f"Skipping the SSH window for {name} because its connection check failed.")
+                    continue
+                launch_ssh_popup(name, cmd, case_dir, terminal=terminal)
 
         info(f"{GREEN}To access the machines, use the following SSH commands:{NC}")
         for name, cmd in ssh_commands.items():
@@ -1066,7 +1141,13 @@ tests use live logging and all-case runs suppress test output.""",
         type=parse_bool,
         default=True,
         metavar="{true,false}",
-        help="open terminator SSH windows after VMs are ready: true or false (default: true)",
+        help="open SSH terminal windows after VMs are ready: true or false (default: true)",
+    )
+    scenario_parser.add_argument(
+        "--terminal",
+        choices=("terminator", "xterm"),
+        default="terminator",
+        help="SSH popup terminal (default: terminator, with xterm fallback on startup failure)",
     )
     scenario_parser.set_defaults(action="scenario", print_help_when_empty=True, command_parser=scenario_parser)
 
@@ -1211,6 +1292,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             isVulnerable=cli_vulnerability(args),
             system=args.system,
             popup=args.popup,
+            terminal=args.terminal,
         )
 
     if action == "test":

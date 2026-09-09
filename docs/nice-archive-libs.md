@@ -435,8 +435,28 @@ These fields are read in addition to the normal `testsGenerator` VM fields:
 | Field | Default | Description |
 | --- | --- | --- |
 | `oldKernelNixpkgs` | Top-level `oldKernelNixpkgs` | Per-VM old nixpkgs source. |
-| `oldKernelGraphics` | `isInteractive` | Graphics value for the old-kernel VM build. |
+| `oldKernelGraphics` | `isGraphics`, otherwise `false` | Graphics value for the old-kernel VM build; `null` leaves the historical NixOS default in effect. |
 | `oldKernelRestrictNetwork` | `null` | Network restriction value for the old-kernel VM build. |
+
+Old-kernel tests and scenarios are headless by default. Set
+`oldKernelGraphics = true` (or `isGraphics = true`) for graphical guests.
+The wrapper translates headless QEMU output to `-display none`, preserving
+the test driver's serial and monitor connections. Modern helper VM launch
+scripts are copied unchanged.
+
+Interactive old-kernel guests receive a dedicated, socket-activated SSH
+backdoor on vsock port 22. The wrapper preserves the base driver's vsock CID
+for each replaced node, including when modern helpers precede it. The guest
+listener uses its own SSH configuration and an ephemeral host key; it neither
+opens a TCP port nor changes the case's ordinary SSH service. Lab root has an
+empty initial password by default; explicit case credentials take precedence.
+Automated variants do not enable this SSH listener.
+
+The historical guest needs virtio-vsock kernel support and systemd support for
+`ListenStream=vsock::22`. The host needs `/dev/vhost-vsock` and the
+`systemd-ssh-proxy` SSH configuration used by the base driver's printed
+commands. `--popup false` disables only the CLI's SSH terminal windows;
+QEMU graphics are controlled separately by the VM fields above.
 
 ### LibreOffice-style graphical example
 
@@ -503,6 +523,13 @@ in
 
 The keys in `oldKernelVMs` must match the machine names in the base test
 driver.
+
+Each supplied NixOS evaluation must expose `config.virtualisation.graphics`
+(import its `virtualisation/qemu-vm.nix` module). Interactive replacements
+must also provide a guest SSH listener on vsock port 22; the high-level
+generator installs this automatically. This wrapper expects a base driver
+with `export startScripts` and, for interactive replacements, a
+`vhost-vsock-pci` device in each original launch script.
 
 ## Python assertion blocks
 
