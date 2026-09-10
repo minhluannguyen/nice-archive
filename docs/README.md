@@ -35,3 +35,4 @@ Archive as a reproducible vulnerability-reporting framework.
 | [Library reference](./nice-archive-libs.md) | Contributors and agents editing library-backed cases | `testsGenerator`, `standaloneVMGenerator`, `oldKernelTestsGenerator`, VM fields, assertions. |
 | [Vulnerability reporting guide](./reporting-vulnerabilities.md) | Humans and LLM agents building CVE reports | End-to-end technical workflow and checklists. |
 | [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md) | Experiment runners | Batch OpenCode worktree orchestration, result files, live output, and OpenRouter metadata. |
+| [Independent recipe evaluator prompt](./cve-recipe-evaluator-prompt.md) | Reviewer LLMs | Strict artifact, evidence, safety, and JSON-verdict contract for evaluating generated recipes. |

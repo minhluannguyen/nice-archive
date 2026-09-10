@@ -3,7 +3,8 @@
 `cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
 detached Git worktree directory for each CVE. It supports parallel workers,
 retries, hard attempt timeouts, resume, per-CVE worktree cleanup, live
-interaction output, and optional OpenRouter metadata enrichment.
+interaction output, optional independent LLM evaluation, random human-review
+sampling, and optional OpenRouter metadata enrichment.
 
 ## What it records
 
@@ -19,6 +20,9 @@ For every attempt it records:
 - full OpenCode JSONL output and stderr
 - a snapshot of the complete matching CVE directory before cleanup, excluding
   generated VM images, logs, and other configured artifacts
+- the raw `EXPERIMENT_RESULT.json` copied into each attempt directory
+- an optional, separately validated evaluator verdict and its exact prompt,
+  command, logs, metadata, artifact inventory, and JSON result
 - OpenRouter prompt/completion/reasoning/cached token counts, provider, model, latency, and cost when an OpenRouter generation ID is available
 
 The runner does not ask the LLM to estimate its own token use. Per-CVE
@@ -72,6 +76,15 @@ OPENCODE_MODEL=openai/<model-name>
 OPENCODE_MODEL=anthropic/<model-name>
 # or:
 OPENCODE_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
+
+# Optional generator agent and reasoning variant.
+OPENCODE_AGENT=cve-reproducer
+OPENCODE_VARIANT=high
+
+# Optional independent-review overrides. The model value includes its provider.
+CVE_ORCHESTRATOR_EVALUATION_MODEL=anthropic/<reviewer-model>
+CVE_ORCHESTRATOR_EVALUATION_AGENT=cve-reviewer
+CVE_ORCHESTRATOR_EVALUATION_EFFORT=high
 ```
 
 Use `--model` to override `OPENCODE_MODEL` for a run:
@@ -149,14 +162,26 @@ nice-archive/
         │   ├── state.json
         │   ├── readme-handoff.json
         │   ├── readme-handoff.md
+        │   ├── RECIPE_EVALUATION.json
+        │   ├── evaluation/
+        │   │   ├── artifact-inventory.json
+        │   │   ├── prompt.md
+        │   │   ├── command.json
+        │   │   ├── opencode-output.jsonl
+        │   │   ├── opencode-stderr.log
+        │   │   ├── opencode-env.json
+        │   │   └── result.json
         │   ├── worktree-snapshot/
         │   │   ├── snapshot-manifest.json
         │   │   └── cves/cve-2023-50268-example/...
         │   └── attempt-01/
         │       ├── result.json
+        │       ├── command.json
+        │       ├── EXPERIMENT_RESULT.json
         │       ├── opencode-output.jsonl
         │       ├── opencode-stderr.log
         │       └── opencode-env.json
+        ├── human-review-sample.json
         ├── .scenario.lock
         └── ...
 
@@ -174,6 +199,7 @@ opencode_output_tokens,opencode_reasoning_tokens,
 opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
 opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
 orchestrator_phase,orchestrator_summary,orchestrator_last_error,
+evaluation_status,evaluation_verdict,evaluation_summary,
 worktree_cleanup_policy,worktree_removed,worktree_snapshot,worktree_ref,...
 ```
 
@@ -235,6 +261,8 @@ in the assigned per-CVE worktree, not in the original repository checkout.
 An OpenCode process exiting with code 0 is not automatically treated as a
 successful CVE reproduction. The agent must explicitly report `success` in this
 file. If the file is absent or malformed, the run is `inconclusive`.
+The exact file is also copied to `attempt-XX/EXPERIMENT_RESULT.json`; the parsed
+copy embedded in `result.json` is not the only retained representation.
 
 Regardless of status, the orchestrator writes an `orchestrator_summary` into
 `attempt-XX/result.json`, the final per-CVE `state.json`, `readme-handoff.json`,
@@ -377,3 +405,73 @@ cve-orchestrator cves.txt \
   --effort high \
   --resume
 ```
+
+## 12. Independent LLM recipe evaluation
+
+Enable a distinct reviewer process for each reproduction that finishes with
+`status=success`:
+
+```bash
+cve-orchestrator cves.txt \
+  --evaluate-recipes \
+  --evaluation-timeout-minutes 90
+```
+
+Set generator and reviewer runtime configuration in `.env` or the process
+environment. `OPENCODE_MODEL`, `OPENCODE_AGENT`, and `OPENCODE_VARIANT` select
+the generator. `CVE_ORCHESTRATOR_EVALUATION_MODEL`,
+`CVE_ORCHESTRATOR_EVALUATION_AGENT`, and
+`CVE_ORCHESTRATOR_EVALUATION_EFFORT` optionally override those values for the
+reviewer; without overrides, the reviewer inherits the generator settings. The
+provider is the prefix in the model value, and standard provider credentials
+such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `OPENROUTER_API_KEY` are
+inherited from the same environment. Credentials are never placed in the
+evaluator prompt, command JSON, or environment summary.
+
+The default evaluator prompt is
+[`cve-recipe-evaluator-prompt.md`](./cve-recipe-evaluator-prompt.md). Use
+`--evaluation-prompt-file` to replace it. A custom prompt can use `{cve}`,
+`{recipe_path}`, `{artifact_root}`, `{state_path}`, `{inventory_path}`,
+`{result_path}`, and `{worktree_path}` markers.
+
+Before review, the orchestrator freezes the matching case directory and writes
+`evaluation/artifact-inventory.json`. The evaluator inspects that immutable
+recipe and all attempt evidence. For a newly completed recipe, its runnable
+worktree remains available so the reviewer can independently repeat bounded
+NICE Archive VM checks. On a resumed result whose worktree was already cleaned,
+the evaluator must grade only the retained evidence and mark checks unverified
+when it cannot safely repeat them.
+
+The reviewer may write only `RECIPE_EVALUATION.json`. The orchestrator hashes
+the recipe and result inputs before and after review and invalidates the review
+if they change. Its machine validator requires all ten named requirement checks,
+valid statuses, evidence for every passing check, list-valued missing-artifact,
+concern, and command fields, and consistent overall verdict logic. It also
+forces a failed evaluation when the deterministic preflight inventory is
+incomplete. Thus an evaluator's prose or self-declared `pass` cannot bypass the
+artifact contract.
+
+Evaluation is additive: it never changes the reproduction `status`. The
+details are stored in `state.json`, `readme-handoff.*`, `summary.csv`, and the
+`evaluation/` directory. Resume preserves an existing evaluation; pass
+`--reevaluate` together with `--evaluate-recipes` to replace it. When every
+reproduction succeeded but an enabled evaluation failed or was inconclusive,
+the orchestrator exits with status 3 (reproduction failures retain status 2).
+
+## 13. Random human-review sample
+
+Print a random subset of successful, artifact-backed recipes after the batch:
+
+```bash
+cve-orchestrator cves.txt \
+  --resume \
+  --human-review-sample 10
+```
+
+The stdout block gives each selected CVE, retained recipe path, `state.json`, and
+evaluation status. The full selection is retained in
+`human-review-sample.json`.
+
+Sampling uses only successful recipes whose retained recipe directory can be
+resolved. If the requested count exceeds that population, all eligible recipes
+are selected and stdout reports the reduced count.
