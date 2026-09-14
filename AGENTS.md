@@ -240,7 +240,9 @@ main agent must own the managed process and may delegate only bounded work such
 as research, log analysis, or individual guest commands.
 
 When that capability gate passes, use a scenario subagent to keep
-`nice-archive scenario ... --popup false` alive and report its SSH commands;
+`nice-archive scenario ... --popup false --log file --status-file <file>` alive
+and report its SSH commands; use the bounded `scenario> ` command proxy for
+test-driver Python and exit it with `:quit`;
 use VM-operator subagents for bounded guest health checks, trigger execution,
 and evidence collection; and use test-runner subagents for automated variants.
 The main agent monitors progress, compares vulnerable/fixed evidence, and

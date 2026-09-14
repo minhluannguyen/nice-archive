@@ -12,6 +12,7 @@ target
 .nixos-test-history
 
 *.log
+scenario-*.status.json
 
 cves/llm-experiment/
 .nice-archive-scenario.lock
