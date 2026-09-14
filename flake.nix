@@ -44,14 +44,6 @@
 
           runtimePath = pkgs.lib.makeBinPath runtimePackages;
 
-          cveOrchestratorRuntimePackages = runtimePackages ++ (with pkgs; [
-            git
-          ]) ++ [
-            opencodePkgs.opencode
-          ];
-
-          cveOrchestratorRuntimePath = pkgs.lib.makeBinPath cveOrchestratorRuntimePackages;
-
           nixVersions = nix-versions.packages.${system}.default;
 
           nice-archive = pkgs.writeShellScriptBin "nice-archive" ''
@@ -60,15 +52,10 @@
             exec ${pythonEnv}/bin/python ${self}/nice-archive.py "$@"
           '';
 
-          cve-orchestrator = pkgs.writeShellScriptBin "cve-orchestrator" ''
-            export PATH=${cveOrchestratorRuntimePath}:$PATH
-
-            if [ -f "$PWD/cve-orchestrator.py" ]; then
-              exec ${pkgs.python312}/bin/python "$PWD/cve-orchestrator.py" "$@"
-            fi
-
-            exec ${pkgs.python312}/bin/python ${self}/cve-orchestrator.py "$@"
-          '';
+          cve-orchestrator = import ./otool/package.nix {
+            inherit pkgs runtimePackages opencodePkgs;
+            sourceRoot = self;
+          };
 
           cve-loc-report = pkgs.writeShellScriptBin "cve-loc-report" ''
             exec ${pkgs.python312}/bin/python ${self}/cve-loc-report.py "$@"

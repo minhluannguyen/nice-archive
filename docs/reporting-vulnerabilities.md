@@ -1566,6 +1566,14 @@ integrations, including some GitHub Copilot Chat configurations, may identify
 the harness but expose no exact model, per-task token counts, or billing data to
 the agent. Missing telemetry does not block completion.
 
+For orchestrated OpenCode runs, final telemetry becomes available only after
+the reproduction process exits. Leave final model/usage/cost rows pending
+orchestrator metadata finalization. The separate metadata agent and validated
+README updater populate them from completed attempt records before the recipe
+is copied and evaluated. Record shell facts when exposed during reproduction;
+do not estimate final totals. See the orchestrator's
+[metadata lifecycle](../otool/README.md#post-reproduction-readme-metadata).
+
 Never infer tokens from context size or text length. A subscription price is
 not a per-run cost. If cost is calculated from known token counts, label it as
 an estimate and cite the model pricing source, currency, and pricing date. Do

@@ -14,7 +14,7 @@ Archive as a reproducible vulnerability-reporting framework.
   repository-level `AGENTS.md` contract. Use it for VM design, flake structure,
   tests, CLI commands, interactive debugging, and handoff checklists.
 
-- [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md)
+- [CVE OpenCode batch orchestrator](../otool/README.md)
   Use this when running unattended multi-CVE OpenCode experiments and collecting
   batch-level result metadata.
 
@@ -34,5 +34,6 @@ Archive as a reproducible vulnerability-reporting framework.
 | [Root README](../README.md) | New users | Setup, CLI usage, interactive helper usage, direct Nix outputs, cleanup. |
 | [Library reference](./nice-archive-libs.md) | Contributors and agents editing library-backed cases | `testsGenerator`, `standaloneVMGenerator`, `oldKernelTestsGenerator`, VM fields, assertions. |
 | [Vulnerability reporting guide](./reporting-vulnerabilities.md) | Humans and LLM agents building CVE reports | End-to-end technical workflow and checklists. |
-| [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md) | Experiment runners | Batch OpenCode worktree orchestration, result files, live output, and OpenRouter metadata. |
-| [Independent recipe evaluator prompt](./cve-recipe-evaluator-prompt.md) | Reviewer LLMs | Strict artifact, evidence, safety, and JSON-verdict contract for evaluating generated recipes. |
+| [CVE OpenCode batch orchestrator](../otool/README.md) | Experiment runners | Batch OpenCode worktree orchestration, result files, live output, and OpenRouter metadata. |
+| [Independent recipe evaluator prompt](../otool/docs/cve-recipe-evaluator-prompt.md) | Reviewer LLMs | Strict artifact, evidence, safety, and JSON-verdict contract for evaluating generated recipes. |
+| [README metadata prompt](../otool/docs/cve-readme-metadata-prompt.md) | Post-reproduction metadata agent | Populate measured OpenCode metadata after the reproduction process exits. |
