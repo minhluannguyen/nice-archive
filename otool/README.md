@@ -1,16 +1,16 @@
 # otool: CVE OpenCode batch orchestrator
 
 `cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
-detached Git worktree directory for each CVE. It supports parallel workers,
-retries, hard attempt timeouts, resume, per-CVE worktree cleanup, live
+standalone repository copy under `/tmp` for each CVE. It supports parallel workers,
+selective infrastructure retries, hard attempt/token/call budgets, resume, per-CVE copy cleanup, live
 interaction output, optional independent LLM evaluation, random human-review
 sampling, and optional OpenRouter metadata enrichment.
 
 Implementation, helper modules, prompts, and Nix packaging live under `otool/`.
 The repository-root `./cve-orchestrator` Bash launcher remains the entry point.
 Bundled prompts are resolved relative to this tool directory, independently of
-the working directory or `--repo`. Existing result and worktree locations and
-their CLI overrides are unchanged.
+the working directory or `--repo`. Existing result locations and legacy
+workspace-related CLI names and overrides are unchanged.
 
 ```text
 otool/
@@ -30,8 +30,10 @@ For every attempt it records:
 
 - wall-clock execution time
 - OpenCode exit code / timeout state
+- configured and observed live LLM-call/input-token budgets, including the
+  exact exceeded limit when an attempt is stopped
 - agent-declared reproduction result (`success`, `failure`, or `inconclusive`)
-- orchestrator-generated fallback summary from logs and worktree state, even
+- orchestrator-generated fallback summary from logs and repository-copy state, even
   when the agent omits or corrupts `EXPERIMENT_RESULT.json`
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
@@ -48,17 +50,32 @@ OpenRouter attribution is exact when OpenRouter `gen-...` IDs appear in
 OpenCode output. Otherwise, sequential runs can still record an API-key spend
 delta.
 
-While jobs are running, the orchestrator shows a live dashboard with one column
-per visible worker: CVE, attempt, elapsed time, status, and recent sanitized
-OpenCode stdout/stderr snippets. The full raw streams are still written to the
-attempt artifacts. Use `--live` to force this display when stderr is not a TTY,
-or `--no-live` for quiet batch logs.
+While jobs are running, the orchestrator shows one vertical block per worker:
+CVE, attempt, elapsed time, logical step, active tool/command, the last ten
+sanitized command-output lines, and live budget usage. The full raw streams are
+still written to the attempt artifacts. Use `--live` to force concise
+state-change output when stderr is not a TTY, or `--no-live` for quiet batch
+logs.
+
+Each copy includes its own `.git` metadata so existing status/diff-based
+evidence collection continues to work, but the orchestrator does not create a
+branch or call `git worktree`. Agent changes cannot modify the source checkout's
+working tree or index.
 
 The NICE Archive CLI serializes `nice-archive scenario` startup with a file
 lock because concurrent scenario-mode VM labs can block each other. The
 orchestrator sets `NICE_ARCHIVE_SCENARIO_LOCK=<results-root>/.scenario.lock`
-for each OpenCode worker so all worker worktrees share the same lock.
+for each OpenCode worker so all worker copies share the same lock.
 `nice-archive test` is not locked and can still run in parallel.
+
+The bundled agent starts scenarios with `--popup false --log file
+<variant>.log --status-file <variant>.status.json`. File mode keeps the full
+test-driver transcript off the model-facing console and exposes a bounded
+`scenario> ` proxy instead. The agent sends one-line Python commands through
+the managed PTY, uses `exec("...\\n...")` for multi-line Python, reads through
+the `</scenario-command-output>` marker, and enters `:quit` before waiting for
+the scenario process to exit. The status JSON supplies lifecycle state and
+verified SSH commands without requiring repeated transcript reads.
 
 ## 1. Prepare the CVE list
 
@@ -80,6 +97,16 @@ The flake includes Nixpkgs' `opencode` package, which provides the `opencode`
 binary used by default. The orchestrator loads simple `KEY=VALUE` entries from
 the repository `.env` and passes that environment to `opencode run`, so provider
 API keys can be stored there.
+
+The repository includes `.opencode/agents/cve-reproducer.md`. OpenCode 1.18.18
+loads it as a primary agent with `steps: 40`; it also denies standalone
+`sleep *` Bash commands while retaining Bash and all PTY tools. The agent uses
+`pty_spawn(notifyOnExit=true)` for long jobs and waits for `<pty_exited>` rather
+than polling. `.opencode/opencode.json` enables automatic compaction, old tool
+output pruning, and a 20,000-token reserve. The orchestrator selects this agent
+unless `--agent` or `OPENCODE_AGENT` selects another one. Unless the caller has
+already set `OPENCODE_CONFIG_DIR`, it points OpenCode at this repository config
+so the bundled agent is also available to resumed copies made by older runs.
 
 Example `.env` entries:
 
@@ -141,7 +168,9 @@ cve-orchestrator cves.txt \
   --repo /home/lundi3691/study/phd/nice-archive \
   --workers 2 \
   --timeout-minutes 120 \
-  --retries 1 \
+  --retries 0 \
+  --max-llm-calls 300 \
+  --max-input-tokens 4000000 \
   --model deepseek/deepseek-v4-flash-0731 \
   --effort high \
   --resume
@@ -156,17 +185,26 @@ opencode run --format json --auto \
   "..."
 ```
 
-Use `--agent AGENT_ID` if you have an OpenCode agent configured for this
-workflow.
+Use `--agent AGENT_ID` to select another configured OpenCode agent.
+
+The live guard counts each unique `step_finish`/usage generation once as JSONL
+arrives. Cache reads are reported separately and do not inflate the input-token
+budget. Defaults are 300 LLM calls and 4,000,000 non-cached input tokens per
+reproduction attempt; `0` disables either limit. Crossing a limit displays
+`BUDGET EXCEEDED`, terminates the OpenCode process group, preserves raw logs and
+partial work, and records `status=budget_exceeded`. Final post-exit telemetry is
+still parsed independently and remains authoritative.
 
 ## 4. Results
 
 Default result artifacts are written under `cves/llm-experiment-results/`.
-Per-CVE worktrees are detached at `--base-ref`, so the orchestrator does not
-create experiment branches. All retries for one CVE reuse the same worktree.
-After the CVE succeeds or exhausts its retries, the orchestrator copies its
+Per-CVE workspaces default to `/tmp/<repo>-<uid>.cve-copies/CVE-...`. The
+legacy-named `--worktree-root` option can override that root. The source HEAD
+identified by `--base-ref` is recorded, while the copy contains the source
+checkout's current filesystem state. All retries for one CVE reuse the same copy.
+After the CVE succeeds or the retry policy stops further attempts, the orchestrator copies its
 complete matching case directory directly to `CVE-.../recipe/`. It then removes
-the worktree when the cleanup policy calls for it. An interrupted worktree is
+the workspace copy when the cleanup policy calls for it. An interrupted copy is
 retained so `--resume` can continue it.
 
 ```text
@@ -223,7 +261,7 @@ nice-archive/
         ├── .scenario.lock
         └── ...
 
-../nice-archive.cve-worktrees/
+/tmp/nice-archive-<uid>.cve-copies/
 ├── CVE-2023-50268/
 ├── CVE-2019-10906/
 └── ...
@@ -263,7 +301,7 @@ including the scenario lock path used for that attempt.
 
 After the final reproduction attempt exits, the orchestrator collects OpenCode
 usage and runs a separate documentation-only metadata agent. It then copies the
-recipe, runs optional evaluation, and applies the worktree cleanup policy.
+recipe, runs optional evaluation, and applies the repository-copy cleanup policy.
 This step also runs when recipe evaluation is disabled.
 
 The reproduction agent leaves final AI metadata pending. The metadata agent
@@ -271,7 +309,7 @@ receives measured fields computed from completed attempts using
 [`cve-readme-metadata-prompt.md`](./docs/cve-readme-metadata-prompt.md). Python checks
 its JSON against those fields and updates only the README's `Reproduction
 metadata` section, preserving recorded shell facts and all other sections.
-Both the worktree README and its subsequent `recipe/` copy contain the update.
+Both the workspace README and its subsequent `recipe/` copy contain the update.
 
 This pass has its own `llm-logs/readme-metadata/` records and original README
 backup. Its usage and the evaluator's usage are excluded from reproduction
@@ -293,36 +331,41 @@ without a single README are skipped. Detached evaluation and resume-skipped
 results do not retroactively edit existing README files.
 
 After all attempts finish, the recipe is copied to `recipe/` regardless of the
-worktree cleanup policy. `--cleanup-worktrees` controls only whether the source
-worktree is then removed; retries never delete or recreate it:
+repository-copy cleanup policy. The legacy-named `--cleanup-worktrees` option
+controls only whether the source copy is then removed; retries never delete or
+recreate it:
 
-- `finished` (default): remove completed non-interrupted CVE worktrees, whether
+- `finished` (default): remove completed non-interrupted CVE copies, whether
   successful or failed.
 - `success`: cleanup only successful CVEs.
 - `always`: cleanup every completed CVE, with the same interruption protection
   as `finished`.
-- `never`: keep all per-CVE worktrees for debugging.
+- `never`: keep all per-CVE copies for debugging.
 
-Interrupted worktrees are retained under every cleanup policy. A later
-`--resume` reuses that worktree and preserves earlier attempt artifacts.
+Interrupted copies are retained under every cleanup policy. A later
+`--resume` reuses that copy and preserves earlier attempt artifacts.
 
 Cleanup is refused when `--results` and `--worktree-root` are the same
-directory, because removing a worktree would also risk deleting the result
+directory, because removing a copy would also risk deleting the result
 artifacts. It is also refused when no matching CVE case directory can be
 copied. Keep these roots separate for normal batch runs; on any recipe-copy or
-cleanup error, the worktree remains available for inspection.
+cleanup error, the copy remains available for inspection. Cleanup also requires
+the adjacent orchestrator marker to match the copy and source repository, so a
+legacy Git worktree or unrelated directory is never removed as though it were a
+managed copy.
 
 ## 5. Success/failure contract
 
-The prompt instructs the agent to create `EXPERIMENT_RESULT.json` in its
-worktree root before it finishes:
+The prompt instructs the agent to create `EXPERIMENT_RESULT.json` near the
+beginning with an `inconclusive`/`experiment_incomplete` placeholder, update it
+as evidence appears, and overwrite it with the final result before normal
+completion:
 
-The built-in prompt also tells the agent to stay in the assigned detached
-worktree directory and not create, switch, or require a separate Git branch for
-the experiment.
+The built-in prompt also tells the agent to stay in the assigned repository
+copy and not create, switch, or require a Git branch or Git worktree.
 
-The orchestrator launches OpenCode with `--dir <worktree>` so tool writes land
-in the assigned per-CVE worktree, not in the original repository checkout.
+The orchestrator launches OpenCode with `--dir <workspace-copy>` so tool writes
+land in the assigned per-CVE copy, not in the original repository checkout.
 
 ```json
 {
@@ -346,7 +389,7 @@ copy embedded in `result.json` is not the only retained representation.
 Regardless of status, the orchestrator writes an `orchestrator_summary` into
 `llm-logs/attempt-XX/result.json`, the final per-CVE `state.json`, `readme-handoff.json`,
 `readme-handoff.md`, and `summary.csv`. This summary is derived from OpenCode
-JSONL/stderr logs and Git worktree changes. It is meant for triage and README
+JSONL/stderr logs and Git changes inside the workspace copy. It is meant for triage and README
 handoff; it does not replace the case oracle or the agent's
 `EXPERIMENT_RESULT.json`.
 
@@ -376,33 +419,45 @@ Resume modes:
 
 - `success-only`: skip only `status=success`.
 - `terminal`: skip `success`, `failure`, `inconclusive`, `timeout`,
-  `opencode_error`, `orchestrator_error`, and `interrupted`.
+  `budget_exceeded`, `opencode_error`, `orchestrator_error`, and `interrupted`.
 - `existing`: skip any CVE that already has a `state.json`, even if the state
   cannot be parsed.
 
-Retries within one invocation always build on the same worktree. If the batch
-is interrupted, the worktree is kept and the default `success-only` resume mode
+`--retries` defaults to zero. When nonzero, retries are used only for recognized
+transient provider or orchestrator failures (for example rate limiting or a
+temporary gateway failure). Success, reproduction failure, inconclusive,
+budget-exceeded, interrupted, and timeout attempts are never automatically
+retried. Retries within one invocation always build on the same copy. If the batch
+is interrupted, the copy is kept and the default `success-only` resume mode
 continues from it. After a non-interrupted success or final failed attempt, the
 default cleanup policy copies the complete CVE recipe to `recipe/` and removes
-the worktree. Use
-`--cleanup-worktrees never` when you also want completed worktrees retained.
+the workspace copy. Use
+`--cleanup-worktrees never` when you also want completed copies retained. The
+option name is retained for CLI and result-schema compatibility.
 
 ## 7. Live output
 
 On a normal terminal, running attempts show a compact dashboard such as:
 
 ```text
-/ OpenCode live  active=2/5  workers=2  15:42:10
----------------------------------------------------
-CVE-2024-23334  a1  03:14        CVE-2019-6111  a1  02:58
-status: running                   status: running
-stdout: session.updated           stdout: tool.call | tool=bash
-stderr: running nix eval          stdout: message.completed | tokens=1200/340
+| OpenCode live  active=2/5  workers=2  15:42:10
+────────────────────────────────────────────────────────────────
+┌─ CVE-2024-23334  attempt 1  03:14  RUNNING ───────────────────
+│ Step: Testing vulnerable behavior
+│ Tool: pty_spawn
+│ Cmd : nix run . -- test --case cve-2024-23334 ...
+│
+│ Output:
+│   machine # booting QEMU...
+│   machine # waiting for multi-user.target
+│ LLM: 27/300 calls   Input: 1.74M/4.00M   Cached: 320.0k
+└───────────────────────────────────────────────────────────────
 ```
 
-The dashboard is refreshed in place on TTYs and printed periodically in
-non-interactive logs. Secrets matching common OpenRouter, GitHub PAT, and
-bearer-token forms are redacted in this live view.
+The dashboard is refreshed in place and colored only on TTYs (unless
+`NO_COLOR` is set). Non-interactive logs receive concise state changes plus an
+occasional compact snapshot. Secrets matching common OpenRouter, GitHub PAT,
+and bearer-token forms are redacted in this live view.
 
 ## 8. OpenRouter metadata caveat
 
@@ -427,7 +482,7 @@ cve-orchestrator \
   --timeout-minutes 5 \
   --retries 0 \
   --results /tmp/otool-probe-results \
-  --worktree-root /tmp/otool-probe-worktrees
+  --worktree-root /tmp/otool-probe-copies
 ```
 
 The probe does not reproduce a vulnerability. It asks the agent only to write
@@ -453,7 +508,7 @@ avoid placing unrelated credentials in the agent environment.
 Press Ctrl-C once to request a coordinated shutdown. The orchestrator cancels
 CVEs that have not started, sends SIGTERM to every active OpenCode process
 group, writes interrupted state/result metadata where possible, and exits with
-code 130. Partially completed CVE worktrees are retained for `--resume`.
+code 130. Partially completed CVE copies are retained for `--resume`.
 
 Press Ctrl-C a second time to force-kill active OpenCode process groups with
 SIGKILL.
@@ -526,7 +581,7 @@ the documented scope with configuration, installation/version evidence,
 source pins, reproducibility, file layout, and test structure. It records read
 and unverified references separately. External URLs and paths are citations;
 the reviewer does not fetch them, follow outside symlinks, or inspect other
-worktrees or parent directories.
+workspace copies or parent directories.
 
 Evaluation is a documentation and evidence review. It does not run scenarios,
 tests, builds, services, or PoCs. Automated vulnerable/fixed outcomes are graded
@@ -579,7 +634,7 @@ the orchestrator exits with status 3 (reproduction failures retain status 2).
 
 Use `--evaluate-results` to run evaluation later as a separate batch step. This
 mode reads completed `state.json` files and retained `recipe/` directories from
-`--results`; it does not create worktrees or start any reproduction attempt:
+`--results`; it does not create workspace copies or start any reproduction attempt:
 
 ```bash
 cve-orchestrator \

@@ -195,7 +195,8 @@ termination.
 For manual validation, use this pattern when practical:
 
 1. Start `nice-archive scenario --case <case> --vulnerable <true|false>
-   --popup false` in a dedicated scenario subagent. The subagent should keep
+   --popup false --log file <variant-log> --status-file <variant-status.json>`
+   in a dedicated scenario subagent. The subagent should keep
    the scenario running as a managed session, capture the printed SSH commands,
    and report readiness plus new output. Apply the 45-minute process-level
    deadline from launch.
@@ -1169,8 +1170,22 @@ Start an interactive scenario directly:
 nice-archive scenario \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
-  --popup false
+  --popup false \
+  --log file scenario-vulnerable.log \
+  --status-file scenario-vulnerable.status.json
 ```
+
+File mode saves the complete scenario transcript while exposing a bounded
+`scenario> ` command proxy. Read the status JSON after readiness for verified
+SSH commands. Submit one-line test-driver Python to the scenario stdin; use
+`exec("line 1\\nline 2")` when multiple Python statements are required. Each
+response ends with `</scenario-command-output>` and is bounded; the full raw
+exchange remains in the log. Enter `:quit` to stop the scenario and its VMs,
+then wait for the managed process to exit. Use distinct log and status files
+for vulnerable and fixed variants. Files named `scenario-*.log` and
+`scenario-*.status.json` are ignored generated artifacts, and normal case
+cleanup preserves the scenario transcripts. `--log live` retains the direct human REPL,
+and `--log none` uses the bounded proxy without saving a transcript.
 
 What the scenario command does:
 
@@ -1192,7 +1207,8 @@ server.succeed("id")
 server.succeed("journalctl -u vulnerable-service --no-pager")
 ```
 
-Exit with `Ctrl+D` in the scenario terminal and choose to kill the VMs.
+In live mode, exit with `Ctrl+D` and choose to kill the VMs. In file or none
+mode, enter `:quit` at `scenario> ` and wait for the process to exit.
 
 ## 11. Debug and reproduce on real VMs
 
@@ -1239,11 +1255,12 @@ Inside the VM, run the exploit exactly as a human researcher would, check logs,
 and inspect files. When the manual flow works, translate the commands into
 `test.py`.
 
-For LLM agents with subagents, run terminal 1 in a scenario subagent and use
-VM-operator subagents for terminal 2 and any additional attacker, client, or
-server sessions. The main agent should keep the printed SSH commands, decide
-which VM each operator should enter, compare the evidence they report, and
-terminate the scenario after both vulnerable and fixed observations are
+For LLM agents with subagents, run terminal 1 with `--log file` and
+`--status-file` in a scenario subagent, then use VM-operator subagents for
+terminal 2 and any additional attacker, client, or server sessions. The main
+agent should read the verified SSH commands from the status JSON, decide which
+VM each operator should enter, compare the evidence they report, enter `:quit`,
+and wait for the scenario to exit after each variant's observations are
 recorded.
 
 ### Path B: run standalone VMs manually

@@ -12,6 +12,7 @@ import argparse
 import shlex
 import os
 import fcntl
+import select
 from contextlib import contextmanager
 from pathlib import Path
 import time
@@ -62,6 +63,8 @@ def warning(msg: str):
 
 ALL_CASES = "__all_cases__"
 DEFAULT_TEST_LOG_TAIL_LINES = 100
+DEFAULT_SCENARIO_RESPONSE_CHARS = 8000
+DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS = 300
 LOG_LIVE = "live"
 LOG_FILE = "file"
 LOG_NONE = "none"
@@ -320,10 +323,13 @@ def print_log_tail(log_text: str):
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
 
-def clean_output(case_dir: Path):
+def clean_output(case_dir: Path, *, keep_logs: bool = False):
     """Clean previous test outputs"""
     try:
-        subprocess.run(["bash", LIBRARY_DIR / "cleanup-script.sh", str(case_dir)], cwd=LIBRARY_DIR, capture_output=True)
+        command = ["bash", LIBRARY_DIR / "cleanup-script.sh", str(case_dir)]
+        if keep_logs:
+            command.append("--keep-logs")
+        subprocess.run(command, cwd=LIBRARY_DIR, capture_output=True)
     except Exception as e:
         warning(f"Error during cleanup: {e}")
 
@@ -540,6 +546,134 @@ def read_until_clean(child, needle: str, timeout: float = 120.0) -> str:
 
     raise TimeoutError(f"Did not see cleaned text: {needle!r}")
 
+
+def read_until_clean_bounded(
+    child,
+    needle: str,
+    timeout: float,
+    max_chars: int = DEFAULT_SCENARIO_RESPONSE_CHARS,
+) -> tuple[str, bool]:
+    """Read through a marker while retaining only a bounded clean-text tail."""
+    deadline = time.time() + timeout
+    clean_tail = ""
+    truncated = False
+
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(size=4096, timeout=1)
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF as exc:
+            raise RuntimeError("Scenario test driver exited before completing the command") from exc
+
+        clean_tail += strip_ansi(chunk)
+        if len(clean_tail) > max_chars:
+            clean_tail = clean_tail[-max_chars:]
+            truncated = True
+        if needle in clean_tail:
+            return clean_tail.partition(needle)[0].rstrip(), truncated
+
+    raise TimeoutError(f"Scenario command did not complete within {timeout:g} seconds")
+
+
+def scenario_artifact_path(case_dir: Path, value: str | Path | None, default_name: str) -> Path:
+    path = Path(value).expanduser() if value else Path(default_name)
+    return path if path.is_absolute() else case_dir / path
+
+
+def write_scenario_status(path: Path | None, payload: dict) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def stop_scenario_child(child, timeout: float = 30.0) -> None:
+    """Ask the interactive test driver to exit, then bound cleanup."""
+    if not child.isalive():
+        return
+    child.sendline("exit()")
+    try:
+        child.expect(pexpect.EOF, timeout=timeout)
+        return
+    except pexpect.TIMEOUT:
+        child.sendcontrol("d")
+        child.sendline("y")
+    try:
+        child.expect(pexpect.EOF, timeout=5)
+    except pexpect.TIMEOUT:
+        child.close(force=True)
+
+
+def proxy_scenario_commands(
+    child,
+    *,
+    command_timeout: float,
+    response_chars: int = DEFAULT_SCENARIO_RESPONSE_CHARS,
+    full_output_logged: bool = False,
+) -> None:
+    """Proxy bounded one-line Python commands to a quiet test-driver REPL."""
+    info("Quiet scenario command proxy ready. Enter one-line Python; use :quit to stop the scenario.")
+    sequence = 0
+    while child.isalive():
+        print("scenario> ", end="", flush=True)
+        line = None
+        while line is None and child.isalive():
+            readable, _, _ = select.select([sys.stdin, child], [], [], 1.0)
+            if child in readable:
+                try:
+                    # Drain unsolicited VM/test-driver output into logfile_read
+                    # without placing it on the quiet console.
+                    child.read_nonblocking(size=4096, timeout=0)
+                except pexpect.TIMEOUT:
+                    pass
+                except pexpect.EOF:
+                    break
+            if sys.stdin in readable:
+                line = sys.stdin.readline()
+        if line is None:
+            raise RuntimeError("Scenario test driver exited while waiting for a command")
+        if line == "":
+            print()
+            stop_scenario_child(child)
+            return
+        command = line.rstrip("\r\n")
+        if not command:
+            continue
+        if command == ":quit":
+            stop_scenario_child(child)
+            return
+
+        sequence += 1
+        marker = f"__NICE_SCENARIO_COMMAND_DONE_{os.getpid()}_{sequence}_{time.time_ns()}__"
+        child.sendline(command)
+        child.sendline(f"print({marker!r})")
+        try:
+            output, truncated = read_until_clean_bounded(
+                child,
+                marker,
+                timeout=command_timeout,
+                max_chars=response_chars,
+            )
+        except Exception as exc:
+            print(f'<scenario-command-output status="error">{exc}</scenario-command-output>', flush=True)
+            raise
+
+        truncation = "true" if truncated else "false"
+        print(f'<scenario-command-output truncated="{truncation}">')
+        if truncated:
+            disposition = (
+                "full output is in the scenario log"
+                if full_output_logged
+                else "earlier output was discarded"
+            )
+            print(f"[output truncated to the last {response_chars} characters; {disposition}]")
+        if output:
+            print(output)
+        print("</scenario-command-output>", flush=True)
+
 # Start interactive scenario section
 def verify_ssh_access(name: str, command: str, attempts: int = 5) -> bool:
     """Confirm that the test driver's advertised SSH route reaches the guest."""
@@ -618,6 +752,10 @@ def start_scenario_case(
     system: str = systemStr,
     popup: bool = True,
     terminal: str = "terminator",
+    log_mode: str = LOG_LIVE,
+    log_file: str | None = None,
+    status_file: str | None = None,
+    command_timeout: float = DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS,
 ) -> bool:
     with scenario_lock():
         return start_scenario_case_unlocked(
@@ -626,6 +764,10 @@ def start_scenario_case(
             system=system,
             popup=popup,
             terminal=terminal,
+            log_mode=log_mode,
+            log_file=log_file,
+            status_file=status_file,
+            command_timeout=command_timeout,
         )
 
 def start_scenario_case_unlocked(
@@ -634,21 +776,66 @@ def start_scenario_case_unlocked(
     system: str = systemStr,
     popup: bool = True,
     terminal: str = "terminator",
+    log_mode: str = LOG_LIVE,
+    log_file: str | None = None,
+    status_file: str | None = None,
+    command_timeout: float = DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS,
 ) -> bool:
     """Start scenario for a single case."""
+    if log_mode not in LOG_MODES:
+        raise ValueError(f"Unsupported scenario log mode: {log_mode}")
+    if log_mode != LOG_FILE and log_file is not None:
+        raise ValueError("A custom scenario log filename requires file logging mode")
+
     info("Starting scenario for a report case...")
     print()
 
     try:
-        clean_output(case_dir)
+        clean_output(case_dir, keep_logs=True)
     except Exception:
         pass
 
+    vulnerable_str = "true" if isVulnerable else "false"
+    default_log_name = f"scenario-vulnerable-{vulnerable_str}-{system.replace('/', '-')}.log"
+    transcript_path = (
+        scenario_artifact_path(case_dir, log_file, default_log_name)
+        if log_mode == LOG_FILE
+        else None
+    )
+    resolved_status_path = (
+        scenario_artifact_path(case_dir, status_file, "scenario-status.json")
+        if status_file
+        else None
+    )
+    status = {
+        "schema_version": 1,
+        "status": "starting",
+        "case": case_dir.name,
+        "variant": "vulnerable" if isVulnerable else "fixed",
+        "system": system,
+        "pid": os.getpid(),
+        "ssh": {},
+        "log": str(transcript_path) if transcript_path else None,
+        "interaction": {
+            "mode": "direct" if log_mode == LOG_LIVE else "bounded-command-proxy",
+            "prompt": "scenario> " if log_mode != LOG_LIVE else None,
+            "exit_command": ":quit" if log_mode != LOG_LIVE else "Ctrl+D",
+        },
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
     info("Extracting VM names from flake...")
+    child = None
+    transcript = None
     try:
         subprocess.run(["git", "add", str(case_dir)], cwd=USER_DIR, capture_output=True)
+        write_scenario_status(resolved_status_path, status)
 
-        vulnerable_str = "true" if isVulnerable else "false"
+        if transcript_path:
+            transcript_path.parent.mkdir(parents=True, exist_ok=True)
+            transcript = transcript_path.open(
+                "w", encoding="utf-8", errors="replace", buffering=1
+            )
+            info(f"Scenario transcript: {transcript_path}")
         child = pexpect.spawn(
             f"nix run .#start-scenario-vulnerable-{vulnerable_str}-{system}",
             cwd=str(case_dir),
@@ -656,8 +843,10 @@ def start_scenario_case_unlocked(
             echo=False
         )
 
-        # Log output to our terminal until the interactive setup finishes.
-        child.logfile_read = sys.stdout
+        # In file mode the raw child stream never reaches the LLM-facing
+        # console. The command proxy emits only bounded command responses.
+        child.logfile_read = sys.stdout if log_mode == LOG_LIVE else transcript
+        child.logfile_send = transcript if log_mode == LOG_FILE else None
 
         clean_text = read_until_clean(
             child,
@@ -700,16 +889,60 @@ def start_scenario_case_unlocked(
         for name, cmd in ssh_commands.items():
             print(f"  - {name}: {cmd}")
 
-        info(f"{RED}To exit the scenario, press Ctrl+D in this terminal and choose 'Yes' to kill the VMs.{NC}")
+        if log_mode == LOG_LIVE:
+            info(f"{RED}To exit the scenario, press Ctrl+D in this terminal and choose 'Yes' to kill the VMs.{NC}")
+        else:
+            info(f"{RED}To exit the scenario and kill its VMs, enter :quit at the scenario> prompt.{NC}")
+        status.update({
+            "status": "ready",
+            "ssh": ssh_commands,
+            "ssh_verified": ssh_ready,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        write_scenario_status(resolved_status_path, status)
+        if resolved_status_path:
+            info(f"Scenario status: {resolved_status_path}")
 
-        child.logfile = None
-        child.logfile_read = None
-        child.logfile_send = None
-        child.interact()
+        if log_mode == LOG_LIVE:
+            child.logfile = None
+            child.logfile_read = None
+            child.logfile_send = None
+            child.interact()
+        else:
+            info("Use one-line Python commands at 'scenario>'; use exec(<quoted string>) for multi-line Python.")
+            proxy_scenario_commands(
+                child,
+                command_timeout=command_timeout,
+                full_output_logged=transcript is not None,
+            )
+
+        status.update({
+            "status": "stopped",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        write_scenario_status(resolved_status_path, status)
         return True
 
+    except KeyboardInterrupt:
+        status.update({
+            "status": "interrupted",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        write_scenario_status(resolved_status_path, status)
+        raise
     except Exception as e:
+        status.update({
+            "status": "error",
+            "error": str(e),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        write_scenario_status(resolved_status_path, status)
         error(f"Could not start scenario: {e}")
+    finally:
+        if child is not None and child.isalive():
+            child.close(force=True)
+        if transcript is not None:
+            transcript.close()
 
 def start_scenario():
     """Start scenario for a single case from the interactive menu."""
@@ -985,6 +1218,16 @@ def parse_bool(value: str) -> bool:
 
     raise argparse.ArgumentTypeError("expected true or false")
 
+
+def parse_positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a positive number") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("expected a positive number")
+    return parsed
+
 class TestLogAction(argparse.Action):
     """Parse --log MODE [FILE]."""
 
@@ -1131,6 +1374,12 @@ tests use live logging and all-case runs suppress test output.""",
         "scenario",
         help="start an interactive CVE scenario",
         description="Start a CVE scenario and attach to the interactive test driver.",
+        formatter_class=TestHelpFormatter,
+        epilog="""quiet proxy workflow:
+  1. Wait for the "scenario> " readiness prompt, then read --status-file.
+  2. Write one-line test-driver Python to stdin; use exec("...\\n...") for multiple lines.
+  3. Read through </scenario-command-output> for the bounded response.
+  4. Write :quit to stop the scenario and its VMs, then wait for process exit.""",
     )
     add_case_args(scenario_parser)
     add_vulnerability_arg(scenario_parser)
@@ -1148,6 +1397,30 @@ tests use live logging and all-case runs suppress test output.""",
         choices=("terminator", "xterm"),
         default="terminator",
         help="SSH popup terminal (default: terminator, with xterm fallback on startup failure)",
+    )
+    scenario_parser.add_argument(
+        "--log",
+        nargs="+",
+        action=TestLogAction,
+        default=(LOG_LIVE, None),
+        dest="scenario_log",
+        metavar="MODE [FILE]",
+        help=(
+            "scenario logging: live keeps direct interactive output; file [FILE] stores the full "
+            "transcript and enables the bounded command proxy; none enables the proxy without a transcript"
+        ),
+    )
+    scenario_parser.add_argument(
+        "--status-file",
+        metavar="FILE",
+        help="write atomic scenario lifecycle, SSH, log, and interaction metadata as JSON",
+    )
+    scenario_parser.add_argument(
+        "--command-timeout",
+        type=parse_positive_float,
+        default=DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+        help="maximum time for one command submitted through the quiet scenario proxy",
     )
     scenario_parser.set_defaults(action="scenario", print_help_when_empty=True, command_parser=scenario_parser)
 
@@ -1281,6 +1554,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
         return list_standalone_vms(case_dir)
 
     if action == "scenario":
+        log_mode, log_file = args.scenario_log
         case_dir = cli_case(
             args,
             parser,
@@ -1293,6 +1567,10 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             system=args.system,
             popup=args.popup,
             terminal=args.terminal,
+            log_mode=log_mode,
+            log_file=log_file,
+            status_file=args.status_file,
+            command_timeout=args.command_timeout,
         )
 
     if action == "test":
