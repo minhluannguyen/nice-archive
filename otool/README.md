@@ -1,10 +1,28 @@
-# CVE OpenCode batch orchestrator
+# otool: CVE OpenCode batch orchestrator
 
 `cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
 detached Git worktree directory for each CVE. It supports parallel workers,
 retries, hard attempt timeouts, resume, per-CVE worktree cleanup, live
 interaction output, optional independent LLM evaluation, random human-review
 sampling, and optional OpenRouter metadata enrichment.
+
+Implementation, helper modules, prompts, and Nix packaging live under `otool/`.
+The repository-root `./cve-orchestrator` Bash launcher remains the entry point.
+Bundled prompts are resolved relative to this tool directory, independently of
+the working directory or `--repo`. Existing result and worktree locations and
+their CLI overrides are unchanged.
+
+```text
+otool/
+├── cve-orchestrator.py
+├── readme_metadata.py
+├── recipe_evaluation_report.py
+├── package.nix
+├── README.md
+└── docs/
+    ├── cve-recipe-evaluator-prompt.md
+    └── cve-readme-metadata-prompt.md
+```
 
 ## What it records
 
@@ -18,7 +36,7 @@ For every attempt it records:
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
-- a snapshot of the complete matching CVE directory before cleanup, excluding
+- a complete recipe copy under the canonical per-CVE `recipe/` directory, excluding
   generated VM images, logs, and other configured artifacts
 - the raw `EXPERIMENT_RESULT.json` copied into each attempt directory
 - an optional, separately validated evaluator verdict and its exact prompt,
@@ -147,8 +165,9 @@ Default result artifacts are written under `cves/llm-experiment-results/`.
 Per-CVE worktrees are detached at `--base-ref`, so the orchestrator does not
 create experiment branches. All retries for one CVE reuse the same worktree.
 After the CVE succeeds or exhausts its retries, the orchestrator copies its
-complete matching case directory into the result directory and removes the
-worktree. An interrupted worktree is retained so `--resume` can continue it.
+complete matching case directory directly to `CVE-.../recipe/`. It then removes
+the worktree when the cleanup policy calls for it. An interrupted worktree is
+retained so `--resume` can continue it.
 
 ```text
 nice-archive/
@@ -158,11 +177,21 @@ nice-archive/
         ├── batch-summary.json
         ├── summary.csv
         ├── summary.jsonl
+        ├── evaluation-batch-manifest.json
+        ├── evaluation-batch-summary.json
         ├── CVE-2023-50268/
         │   ├── state.json
         │   ├── readme-handoff.json
         │   ├── readme-handoff.md
-        │   ├── RECIPE_EVALUATION.json
+        │   ├── recipe-manifest.json
+        │   ├── recipe/
+        │   │   ├── flake.nix
+        │   │   ├── flake.lock
+        │   │   ├── test.py
+        │   │   ├── readme.md
+        │   │   ├── EVALUATION.md
+        │   │   ├── vm-server.nix
+        │   │   └── exploit/...
         │   ├── evaluation/
         │   │   ├── artifact-inventory.json
         │   │   ├── prompt.md
@@ -170,17 +199,26 @@ nice-archive/
         │   │   ├── opencode-output.jsonl
         │   │   ├── opencode-stderr.log
         │   │   ├── opencode-env.json
+        │   │   ├── RECIPE_EVALUATION.json
         │   │   └── result.json
-        │   ├── worktree-snapshot/
-        │   │   ├── snapshot-manifest.json
-        │   │   └── cves/cve-2023-50268-example/...
-        │   └── attempt-01/
-        │       ├── result.json
-        │       ├── command.json
-        │       ├── EXPERIMENT_RESULT.json
-        │       ├── opencode-output.jsonl
-        │       ├── opencode-stderr.log
-        │       └── opencode-env.json
+        │   └── llm-logs/
+        │       ├── attempt-01/
+        │       │   ├── result.json
+        │       │   ├── command.json
+        │       │   ├── EXPERIMENT_RESULT.json
+        │       │   ├── opencode-output.jsonl
+        │       │   ├── opencode-stderr.log
+        │       │   └── opencode-env.json
+        │       └── readme-metadata/
+        │           ├── input.json
+        │           ├── readme-before.md
+        │           ├── prompt.md
+        │           ├── command.json
+        │           ├── opencode-output.jsonl
+        │           ├── opencode-stderr.log
+        │           ├── opencode-env.json
+        │           ├── METADATA_RESULT.json
+        │           └── result.json
         ├── human-review-sample.json
         ├── .scenario.lock
         └── ...
@@ -191,6 +229,14 @@ nice-archive/
 └── ...
 ```
 
+This is the canonical layout shared by reproduction, inline evaluation,
+detached evaluation, summaries, and human sampling. The two
+`evaluation-batch-*.json` files exist only after `--evaluate-results`, and
+`human-review-sample.json` exists only when sampling is requested. Readers keep
+compatibility with older root-level `attempt-XX/` and `worktree-snapshot/`
+results, but every new artifact is written only to the canonical layout.
+`recipe/EVALUATION.md` is generated after review; it is not a reproduction input.
+
 `summary.csv` is the easiest file to analyze later. A row includes fields such as:
 
 ```text
@@ -200,7 +246,7 @@ opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
 opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
 orchestrator_phase,orchestrator_summary,orchestrator_last_error,
 evaluation_status,evaluation_verdict,evaluation_summary,
-worktree_cleanup_policy,worktree_removed,worktree_snapshot,worktree_ref,...
+worktree_cleanup_policy,worktree_removed,recipe_path,recipe_manifest,worktree_ref,...
 ```
 
 Each CVE directory also contains a README handoff pair:
@@ -210,15 +256,48 @@ Each CVE directory also contains a README handoff pair:
 - `readme-handoff.md`: the same information in a compact human-readable form,
   including an instruction to avoid inventing missing metadata.
 
-`attempt-XX/opencode-env.json` records the worker environment summary,
+`llm-logs/attempt-XX/opencode-env.json` records the worker environment summary,
 including the scenario lock path used for that attempt.
 
-Worktree cleanup policy is controlled by `--cleanup-worktrees`. Cleanup happens
-only after all attempts for that CVE have finished; retries never delete or
-recreate the worktree:
+### Post-reproduction README metadata
 
-- `finished` (default): copy the CVE directory and remove completed
-  non-interrupted CVEs, whether successful or failed.
+After the final reproduction attempt exits, the orchestrator collects OpenCode
+usage and runs a separate documentation-only metadata agent. It then copies the
+recipe, runs optional evaluation, and applies the worktree cleanup policy.
+This step also runs when recipe evaluation is disabled.
+
+The reproduction agent leaves final AI metadata pending. The metadata agent
+receives measured fields computed from completed attempts using
+[`cve-readme-metadata-prompt.md`](./docs/cve-readme-metadata-prompt.md). Python checks
+its JSON against those fields and updates only the README's `Reproduction
+metadata` section, preserving recorded shell facts and all other sections.
+Both the worktree README and its subsequent `recipe/` copy contain the update.
+
+This pass has its own `llm-logs/readme-metadata/` records and original README
+backup. Its usage and the evaluator's usage are excluded from reproduction
+totals. Model requests are labeled separately from model identities observed
+in events. Missing telemetry is not replaced with zero; reported zeroes remain
+valid. OpenCode cost is labeled as reported, with no assumed currency or claim
+that it equals the provider's invoice. If the agent fails, times out, or changes
+values, Python applies the measured fields and records `status=fallback`.
+Ambiguous README sections or changes during the pass prevent the update and
+are recorded as errors. `state.json`, the JSON handoff, and CSV expose the
+metadata-pass status.
+
+Configuration is inherited from the generator, with optional environment
+overrides: `CVE_ORCHESTRATOR_METADATA_MODEL`,
+`CVE_ORCHESTRATOR_METADATA_AGENT`, `CVE_ORCHESTRATOR_METADATA_EFFORT`, and
+`CVE_ORCHESTRATOR_METADATA_TIMEOUT_SECONDS` (1–300; default 300). Provider keys
+come from the same process environment. Interrupted reproductions and cases
+without a single README are skipped. Detached evaluation and resume-skipped
+results do not retroactively edit existing README files.
+
+After all attempts finish, the recipe is copied to `recipe/` regardless of the
+worktree cleanup policy. `--cleanup-worktrees` controls only whether the source
+worktree is then removed; retries never delete or recreate it:
+
+- `finished` (default): remove completed non-interrupted CVE worktrees, whether
+  successful or failed.
 - `success`: cleanup only successful CVEs.
 - `always`: cleanup every completed CVE, with the same interruption protection
   as `finished`.
@@ -230,7 +309,7 @@ Interrupted worktrees are retained under every cleanup policy. A later
 Cleanup is refused when `--results` and `--worktree-root` are the same
 directory, because removing a worktree would also risk deleting the result
 artifacts. It is also refused when no matching CVE case directory can be
-copied. Keep these roots separate for normal batch runs; on any snapshot or
+copied. Keep these roots separate for normal batch runs; on any recipe-copy or
 cleanup error, the worktree remains available for inspection.
 
 ## 5. Success/failure contract
@@ -261,11 +340,11 @@ in the assigned per-CVE worktree, not in the original repository checkout.
 An OpenCode process exiting with code 0 is not automatically treated as a
 successful CVE reproduction. The agent must explicitly report `success` in this
 file. If the file is absent or malformed, the run is `inconclusive`.
-The exact file is also copied to `attempt-XX/EXPERIMENT_RESULT.json`; the parsed
+The exact file is also copied to `llm-logs/attempt-XX/EXPERIMENT_RESULT.json`; the parsed
 copy embedded in `result.json` is not the only retained representation.
 
 Regardless of status, the orchestrator writes an `orchestrator_summary` into
-`attempt-XX/result.json`, the final per-CVE `state.json`, `readme-handoff.json`,
+`llm-logs/attempt-XX/result.json`, the final per-CVE `state.json`, `readme-handoff.json`,
 `readme-handoff.md`, and `summary.csv`. This summary is derived from OpenCode
 JSONL/stderr logs and Git worktree changes. It is meant for triage and README
 handoff; it does not replace the case oracle or the agent's
@@ -304,8 +383,8 @@ Resume modes:
 Retries within one invocation always build on the same worktree. If the batch
 is interrupted, the worktree is kept and the default `success-only` resume mode
 continues from it. After a non-interrupted success or final failed attempt, the
-default cleanup policy copies the complete CVE directory to
-`worktree-snapshot/` and removes the worktree. Use
+default cleanup policy copies the complete CVE recipe to `recipe/` and removes
+the worktree. Use
 `--cleanup-worktrees never` when you also want completed worktrees retained.
 
 ## 7. Live output
@@ -429,27 +508,65 @@ inherited from the same environment. Credentials are never placed in the
 evaluator prompt, command JSON, or environment summary.
 
 The default evaluator prompt is
-[`cve-recipe-evaluator-prompt.md`](./cve-recipe-evaluator-prompt.md). Use
+[`cve-recipe-evaluator-prompt.md`](./docs/cve-recipe-evaluator-prompt.md). Use
 `--evaluation-prompt-file` to replace it. A custom prompt can use `{cve}`,
-`{recipe_path}`, `{artifact_root}`, `{state_path}`, `{inventory_path}`,
-`{result_path}`, and `{worktree_path}` markers.
+`{recipe_path}`, `{recipe_inventory}` (embedded JSON), and `{result_path}`.
+The legacy `{artifact_root}` marker now aliases the recipe root. Legacy
+`{state_path}`, `{inventory_path}`, and `{worktree_path}` markers yield
+scope/unavailability notices, not external input paths. Every custom prompt
+is prefixed with the same recipe-only scope instruction.
 
-Before review, the orchestrator freezes the matching case directory and writes
-`evaluation/artifact-inventory.json`. The evaluator inspects that immutable
-recipe and all attempt evidence. For a newly completed recipe, its runnable
-worktree remains available so the reviewer can independently repeat bounded
-NICE Archive VM checks. On a resumed result whose worktree was already cleaned,
-the evaluator must grade only the retained evidence and mark checks unverified
-when it cannot safely repeat them.
+Before review, the orchestrator copies the matching case into `recipe/` and
+writes `evaluation/artifact-inventory.json`. The evaluator inspects that frozen
+recipe only, with its working directory set to the recipe root. The inventory
+is embedded in the prompt so the reviewer need not open external files. It
+reads CVE descriptions, advisory/fix excerpts, and PoC material bundled within
+the recipe as text, then compares
+the documented scope with configuration, installation/version evidence,
+source pins, reproducibility, file layout, and test structure. It records read
+and unverified references separately. External URLs and paths are citations;
+the reviewer does not fetch them, follow outside symlinks, or inspect other
+worktrees or parent directories.
 
-The reviewer may write only `RECIPE_EVALUATION.json`. The orchestrator hashes
-the recipe and result inputs before and after review and invalidates the review
-if they change. Its machine validator requires all ten named requirement checks,
+Evaluation is a documentation and evidence review. It does not run scenarios,
+tests, builds, services, or PoCs. Automated vulnerable/fixed outcomes are graded
+from evidence included in the recipe, such as bundled logs or specific README
+output excerpts. A bare "tests passed" claim is insufficient; missing evidence
+is `unverified`, without searching external attempt logs.
+Manual observations are not required evaluation checks, although documented
+unsafe historical execution and false statements remain reportable findings.
+Pending telemetry from before OpenCode exited is not a documentation failure
+merely because the orchestrator obtained final figures afterward.
+
+Rubric version 3 restricts required artifacts to recipe contents: `flake.nix`,
+`flake.lock`, `test.py`, README, VM/module configuration, and trigger artifacts.
+Orchestrator state, manifests, handoffs, attempt logs, and raw
+`EXPERIMENT_RESULT.json` are not requirements and their absence cannot fail a
+recipe. Legacy snapshot case directories are equally valid recipe roots.
+The orchestrator still uses result state for batch selection and eligibility;
+it does not supply that state as evidence to the reviewer.
+
+The reviewer may write only `evaluation/RECIPE_EVALUATION.json`; this outside
+path is write-only output. The orchestrator hashes
+the recipe inputs before and after review and invalidates the review
+if they change. Its machine validator requires all eleven named requirement checks,
 valid statuses, evidence for every passing check, list-valued missing-artifact,
 concern, and command fields, and consistent overall verdict logic. It also
 forces a failed evaluation when the deterministic preflight inventory is
 incomplete. Thus an evaluator's prose or self-declared `pass` cannot bypass the
 artifact contract.
+
+After validation, the orchestrator renders `recipe/EVALUATION.md` from the
+JSON, including final status, reviewer summary, a checklist with evidence
+excerpts, missing recipe files, concerns, validation findings, reference notes,
+and review metadata. It shows the validator's final status even when that
+differs from the LLM verdict. The full JSON remains linked for detail.
+This report is written after input-change checks, excluded from subsequent
+inventories, and explicitly ignored by later reviews. Reevaluation replaces
+the generated report. A non-generated file with the same name is preserved
+and recorded as `report_error`. For legacy results the report is written into
+the resolved legacy recipe directory. The path is saved in the evaluation's
+`artifacts.report` field, and consequently in `state.json` and its handoff.
 
 Evaluation is additive: it never changes the reproduction `status`. The
 details are stored in `state.json`, `readme-handoff.*`, `summary.csv`, and the
@@ -457,6 +574,40 @@ details are stored in `state.json`, `readme-handoff.*`, `summary.csv`, and the
 `--reevaluate` together with `--evaluate-recipes` to replace it. When every
 reproduction succeeded but an enabled evaluation failed or was inconclusive,
 the orchestrator exits with status 3 (reproduction failures retain status 2).
+
+### Detached evaluation after reproduction
+
+Use `--evaluate-results` to run evaluation later as a separate batch step. This
+mode reads completed `state.json` files and retained `recipe/` directories from
+`--results`; it does not create worktrees or start any reproduction attempt:
+
+```bash
+cve-orchestrator \
+  --evaluate-results \
+  --results cves/llm-experiment-results \
+  --workers 2
+```
+
+With no CVE list, every `CVE-*/state.json` under the results directory is
+considered. Only successful reproductions are eligible; failed and
+inconclusive reproductions receive a skipped evaluation. Provide a CVE list to
+scope the detached step:
+
+```bash
+cve-orchestrator selected-cves.txt \
+  --evaluate-results \
+  --results cves/llm-experiment-results
+```
+
+Existing evaluations are preserved. Add `--reevaluate` to replace them. The
+detached step updates each selected `state.json`, its README handoff, and
+`summary.csv`, while leaving the original `batch-manifest.json` and
+`batch-summary.json` untouched. Its own run metadata is written to
+`evaluation-batch-manifest.json` and `evaluation-batch-summary.json`.
+
+Detached and inline evaluations use the same recipe-only documentation/evidence rubric,
+including when a worktree was retained. Existing evaluations keep their prior
+rubric and verdict until explicitly replaced with `--reevaluate`.
 
 ## 13. Random human-review sample
 

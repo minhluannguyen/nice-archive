@@ -15,9 +15,11 @@ test scenarios.
 .
 ├── cves/                  # One directory per CVE reproduction
 ├── docs/                  # Project documentation
+├── otool/                 # CVE orchestrator code, prompts, docs, and packaging
 ├── src/                   # NICE Archive Nix libraries and Python assertions
 ├── nice-archive.py        # CLI implementation
 ├── nice-archive           # Local wrapper for the CLI
+├── cve-orchestrator       # Launcher for otool/cve-orchestrator.py
 ├── cleanup-script.sh      # Removes generated VM/test artifacts
 ├── cve-loc-report.sh      # Helper script for rough CVE size reports
 └── flake.nix              # Development shell and CLI app
