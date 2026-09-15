@@ -1,10 +1,47 @@
 # otool: CVE OpenCode batch orchestrator
 
-`cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
-standalone repository copy under `/tmp` for each CVE. It supports parallel workers,
-selective infrastructure retries, hard attempt/token/call budgets, resume, per-CVE copy cleanup, live
+`cve-orchestrator` runs one OpenCode agent job per CVE. By default each job,
+including recipe evaluation, runs in its own ephemeral OpenStack VM. A
+`--execution-backend local` compatibility mode retains the standalone repository
+copy behavior. It supports parallel workers, selective infrastructure retries,
+hard attempt/token/call budgets, resume, per-CVE cleanup, live
 interaction output, optional independent LLM evaluation, random human-review
 sampling, and optional OpenRouter metadata enrichment.
+
+Dry-run checks are grouped under one option:
+
+- `--dry-run` or `--dry-run ui` exercises the real terminal UI for 30 seconds
+  with gradually increasing synthetic worker, resource, and token counters. It
+  makes no external calls, consumes no model tokens, and writes no artifacts.
+- `--dry-run openstack` creates one real OpenStack keypair and VM per active
+  worker, injects the public key, verifies SSH, runs the same 30-second
+  token-free simulation, and then deletes the resources.
+- `--dry-run metadata` runs one harmless fake-CVE prompt through OpenCode to
+  verify metadata collection. Unlike the other modes, this makes a small model
+  call and writes the normal probe result artifacts.
+
+UI mode uses CVEs from the supplied list or synthetic CVE labels when no list
+is supplied:
+
+```bash
+cve-orchestrator --dry-run --workers 2
+cve-orchestrator cves.txt --dry-run ui --workers 3
+```
+
+The UI is enabled automatically for a dry run unless `--no-live` is supplied.
+
+Use OpenStack mode to exercise the real cloud lifecycle without invoking
+OpenCode or a model provider:
+
+```bash
+cve-orchestrator cves.txt \
+  --dry-run openstack \
+  --workers 2
+```
+
+This opt-in mode creates billable cloud resources and can take longer than 30
+seconds overall because provisioning, SSH readiness, and deletion happen
+outside the timed UI simulation. It still consumes zero model tokens.
 
 Implementation, helper modules, prompts, and Nix packaging live under `otool/`.
 The repository-root `./cve-orchestrator` Bash launcher remains the entry point.
@@ -57,16 +94,15 @@ still written to the attempt artifacts. Use `--live` to force concise
 state-change output when stderr is not a TTY, or `--no-live` for quiet batch
 logs.
 
-Each copy includes its own `.git` metadata so existing status/diff-based
-evidence collection continues to work, but the orchestrator does not create a
-branch or call `git worktree`. Agent changes cannot modify the source checkout's
-working tree or index.
+Inside either backend, the job uses a repository copy with its own `.git`
+metadata so existing status/diff evidence collection continues to work. The
+orchestrator does not create a branch or call `git worktree`.
 
 The NICE Archive CLI serializes `nice-archive scenario` startup with a file
-lock because concurrent scenario-mode VM labs can block each other. The
-orchestrator sets `NICE_ARCHIVE_SCENARIO_LOCK=<results-root>/.scenario.lock`
-for each OpenCode worker so all worker copies share the same lock.
-`nice-archive test` is not locked and can still run in parallel.
+lock because concurrent scenario-mode VM labs can block each other. Local
+workers share `NICE_ARCHIVE_SCENARIO_LOCK=<results-root>/.scenario.lock`.
+OpenStack workers have independent hosts and locks, so their scenario/test
+commands cannot contend for host QEMU or test-driver processes.
 
 The bundled agent starts scenarios with `--popup false --log file
 <variant>.log --status-file <variant>.status.json`. File mode keeps the full
@@ -88,7 +124,100 @@ CVE-2024-23334
 
 Blank lines and `#` comments are ignored.
 
-## 2. OpenCode setup
+## 2. Execution backends
+
+`openstack` is the default. The orchestrator parses (but does not execute)
+`app-cred-nice-llm-reproduction-cred-openrc.sh`, creates a unique ephemeral
+Ed25519 OpenStack keypair and one VM per CVE, injects the public key through
+`server create --key-name`, waits for SSH, and transfers a credential-filtered
+copy of the repository, then runs the ordinary local
+orchestrator inside that VM. Reproduction, README metadata finalization, and
+optional recipe evaluation all finish remotely. Result files are synchronized
+to the host every 30 seconds and once more before the VM and keypair are
+deleted. The OpenRC and generated private key are never uploaded.
+
+Keep the credential host-readable only by its owner:
+
+```bash
+chmod 600 app-cred-nice-llm-reproduction-cred-openrc.sh
+```
+
+The orchestrator warns when group or other permission bits are present.
+
+Selected defaults are `NixOS-26.05-custom`, `m2.large`, `provider`, the
+`default` security group, and SSH user `root`. The requested image and flavor
+were verified in the tenant; override the login account if the custom image
+uses another user. Override settings with
+`--openstack-image`, `--openstack-flavor`, `--openstack-network`,
+`--openstack-security-group`, or `--openstack-ssh-user`. The selected image must
+support OpenStack SSH-key injection, password SSH for fallback, a writable home
+directory, `sudo` when the login is not root, outbound package downloads, and Nix.
+The custom NixOS image is expected to provide working `nix`, flakes, `rsync`,
+and any required nested-KVM configuration. The orchestrator does not install or
+configure Nix inside the VM.
+
+Pass `--debug` to save a detailed host-side trace for each VM. Normal runs write
+`CVE-.../infrastructure/vm-debug.log`; OpenStack dry runs write beneath
+`<results>/openstack-dry-run/<server-name>/vm-debug.log`. The trace includes
+OpenStack commands and responses, SSH readiness attempts, SCP/rsync actions,
+remote commands and output, and lifecycle cleanup or retention events. Secret
+environment values are not included, and recognizable credential forms are
+redacted.
+
+The custom image is currently registered in Glance with `disk_format=iso`.
+SSH-key injection and writable-root behavior depend on how that ISO was built
+and should be confirmed with a one-VM provisioning smoke test.
+
+The generated public key is injected during OpenStack server creation. SSH
+readiness checks prefer that key and fall back to the custom image's default
+password, `nixos`, including keyboard-interactive authentication. Subsequent
+SSH, SCP, and rsync operations use the injected key only.
+Password delivery uses `sshpass -e`,
+so it does not appear in the SSH/SCP command arguments or logs. Set
+`OPENSTACK_SSH_PASSWORD` in the host environment or `.env` to override it.
+Set an empty value to disable password fallback and use only the injected key.
+This value is removed from the filtered `.env` uploaded to worker VMs.
+
+The OpenStack backend requires `openstack`, `ssh`, `scp`, `sshpass`, `rsync`,
+`tar`, and `ssh-keygen`; the flake supplies them. It performs a read-only image/flavor/
+network/security-group preflight before creating anything. Infrastructure logs
+and lifecycle metadata are written under each result's `infrastructure/`
+directory. OpenStack usage may incur compute and network charges.
+
+Cleanup targets the exact server UUID returned by creation. If final sync or
+deletion fails, `state.json` reports `orchestrator_error` and
+`infrastructure/openstack.json` retains the server UUID and error instead of
+claiming cleanup succeeded. After inspecting the failure, an administrator can
+remove that exact resource with `openstack server delete <server-id>`.
+
+Pass `--openstack-keep-vm` to retain each VM and OpenStack keypair after the
+final artifact synchronization, including when a reproduction is interrupted:
+
+```bash
+cve-orchestrator cves.txt --openstack-keep-vm
+```
+
+An intentional retention is recorded as `retained: true` rather than a cleanup
+failure. The matching private/public key is saved under
+`CVE-.../infrastructure/ssh/` with private-key mode `0600`, and
+`infrastructure/openstack.json` records the exact server UUID, keypair name,
+address, and SSH command. OpenStack dry runs store retained-resource records
+under `<results>/openstack-dry-run/<server-name>/`. Retained VMs continue to
+incur cloud charges. After inspection, delete the exact server and keypair,
+then remove the saved private key:
+
+```bash
+openstack server delete <server-id>
+openstack keypair delete <keypair-name>
+```
+
+To retain the prior host execution behavior:
+
+```bash
+cve-orchestrator cves.txt --execution-backend local
+```
+
+## 3. OpenCode setup
 
 Inside `nix develop`, use the packaged binary directly. Outside the dev shell,
 prefix commands with `nix run .#cve-orchestrator --`.
@@ -130,7 +259,22 @@ OPENCODE_VARIANT=high
 CVE_ORCHESTRATOR_EVALUATION_MODEL=anthropic/<reviewer-model>
 CVE_ORCHESTRATOR_EVALUATION_AGENT=cve-reviewer
 CVE_ORCHESTRATOR_EVALUATION_EFFORT=high
+
+# Optional alternative to the OpenRC file. These stay on the host and are
+# removed from the filtered .env uploaded to the worker VM.
+OS_AUTH_URL=https://openstack.example/v3
+OS_AUTH_TYPE=v3applicationcredential
+OS_IDENTITY_API_VERSION=3
+OS_REGION_NAME=RegionOne
+OS_INTERFACE=public
+OS_APPLICATION_CREDENTIAL_ID=...
+OS_APPLICATION_CREDENTIAL_SECRET=...
 ```
+
+Complete exported `OS_*` application credentials take precedence over `.env`,
+and `.env` takes precedence over values in the OpenRC. If the environment is
+incomplete, the OpenRC fills missing values. The OpenRC remains the default
+fallback.
 
 Use `--model` to override `OPENCODE_MODEL` for a run:
 
@@ -148,7 +292,7 @@ nix develop -c opencode run --format json --model openai/<model-name> "Say ok"
 nix develop -c opencode run --format json --model anthropic/<model-name> "Say ok"
 ```
 
-## 3. DeepSeek V4 Flash 0731 through OpenRouter
+## 4. DeepSeek V4 Flash 0731 through OpenRouter
 
 OpenCode expects models in `provider/model` form. When an OpenRouter key is
 available, the orchestrator accepts the shorter OpenRouter model ID and prefixes
@@ -195,17 +339,18 @@ reproduction attempt; `0` disables either limit. Crossing a limit displays
 partial work, and records `status=budget_exceeded`. Final post-exit telemetry is
 still parsed independently and remains authoritative.
 
-## 4. Results
+## 5. Results
 
 Default result artifacts are written under `cves/llm-experiment-results/`.
-Per-CVE workspaces default to `/tmp/<repo>-<uid>.cve-copies/CVE-...`. The
-legacy-named `--worktree-root` option can override that root. The source HEAD
-identified by `--base-ref` is recorded, while the copy contains the source
-checkout's current filesystem state. All retries for one CVE reuse the same copy.
+With the default backend, the host receives the same per-CVE result layout from
+the remote VM plus `infrastructure/openstack.json`, `openstack.log`, and
+`remote-orchestrator.log`. With `--execution-backend local`, workspaces default
+to `/tmp/<repo>-<uid>.cve-copies/CVE-...`; the legacy-named `--worktree-root`
+option overrides that root. The source HEAD identified by `--base-ref` is
+recorded, while the copy contains the source checkout's current filesystem state.
 After the CVE succeeds or the retry policy stops further attempts, the orchestrator copies its
 complete matching case directory directly to `CVE-.../recipe/`. It then removes
-the workspace copy when the cleanup policy calls for it. An interrupted copy is
-retained so `--resume` can continue it.
+the local workspace copy when that backend's cleanup policy calls for it.
 
 ```text
 nice-archive/
@@ -221,6 +366,10 @@ nice-archive/
         │   ├── state.json
         │   ├── readme-handoff.json
         │   ├── readme-handoff.md
+        │   ├── infrastructure/
+        │   │   ├── openstack.json
+        │   │   ├── openstack.log
+        │   │   └── remote-orchestrator.log
         │   ├── recipe-manifest.json
         │   ├── recipe/
         │   │   ├── flake.nix
@@ -278,7 +427,8 @@ results, but every new artifact is written only to the canonical layout.
 `summary.csv` is the easiest file to analyze later. A row includes fields such as:
 
 ```text
-cve,status,attempts,wall_time_seconds,opencode_input_tokens,
+cve,status,execution_backend,openstack_server_id,openstack_destroyed,
+openstack_artifacts_synced,attempts,wall_time_seconds,opencode_input_tokens,
 opencode_output_tokens,opencode_reasoning_tokens,
 opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
 opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
@@ -354,7 +504,7 @@ the adjacent orchestrator marker to match the copy and source repository, so a
 legacy Git worktree or unrelated directory is never removed as though it were a
 managed copy.
 
-## 5. Success/failure contract
+## 6. Success/failure contract
 
 The prompt instructs the agent to create `EXPERIMENT_RESULT.json` near the
 beginning with an `inconclusive`/`experiment_incomplete` placeholder, update it
@@ -393,7 +543,7 @@ JSONL/stderr logs and Git changes inside the workspace copy. It is meant for tri
 handoff; it does not replace the case oracle or the agent's
 `EXPERIMENT_RESULT.json`.
 
-## 6. Resume
+## 7. Resume
 
 ```bash
 cve-orchestrator cves.txt \
@@ -427,15 +577,16 @@ Resume modes:
 transient provider or orchestrator failures (for example rate limiting or a
 temporary gateway failure). Success, reproduction failure, inconclusive,
 budget-exceeded, interrupted, and timeout attempts are never automatically
-retried. Retries within one invocation always build on the same copy. If the batch
-is interrupted, the copy is kept and the default `success-only` resume mode
-continues from it. After a non-interrupted success or final failed attempt, the
-default cleanup policy copies the complete CVE recipe to `recipe/` and removes
-the workspace copy. Use
-`--cleanup-worktrees never` when you also want completed copies retained. The
-option name is retained for CLI and result-schema compatibility.
+retried. OpenStack retries within one CVE invocation stay on that CVE's VM; a
+later resumed non-terminal CVE starts in a fresh VM using the host repository
+state. The backend best-effort synchronizes partial results before destroying an
+interrupted VM. Local retries build on the same copy, and local interruption
+retains it. After a local run finishes, the default cleanup policy copies the
+complete CVE recipe to `recipe/` and removes the workspace copy. Use
+`--cleanup-worktrees never` to retain completed local copies. The option applies
+only to the local backend and is retained for CLI and result-schema compatibility.
 
-## 7. Live output
+## 8. Live output
 
 On a normal terminal, running attempts show a compact dashboard such as:
 
@@ -459,7 +610,7 @@ The dashboard is refreshed in place and colored only on TTYs (unless
 occasional compact snapshot. Secrets matching common OpenRouter, GitHub PAT,
 and bearer-token forms are redacted in this live view.
 
-## 8. OpenRouter metadata caveat
+## 9. OpenRouter metadata caveat
 
 The strongest per-CVE OpenRouter attribution happens when OpenCode output
 contains OpenRouter `gen-...` response IDs. The orchestrator queries
@@ -470,14 +621,15 @@ If no generation IDs are exposed:
 - with `--workers 1`, the tool can calculate an OpenRouter API-key spend delta before/after each CVE;
 - with multiple workers, a single key's spend delta cannot safely be assigned to an individual CVE, so only the overall batch spend delta is recorded.
 
-## 9. Metadata probe
+## 10. Metadata probe
 
 Run a harmless fake-CVE prompt to verify that OpenCode metadata is visible in
 your environment:
 
 ```bash
 cve-orchestrator \
-  --metadata-probe \
+  --dry-run metadata \
+  --execution-backend local \
   --workers 1 \
   --timeout-minutes 5 \
   --retries 0 \
@@ -494,21 +646,25 @@ The probe does not reproduce a vulnerability. It asks the agent only to write
 /tmp/otool-probe-results/CVE-2099-0001/readme-handoff.md
 ```
 
-## 10. Permissions and isolation
+## 11. Permissions and isolation
 
 By default, the script passes `--auto` so unattended jobs do not stop at routine
 tool approvals. Use `--no-auto` if you prefer stricter OpenCode permission
 handling.
 
-For CVE/PoC experiments, run the batch on an isolated research machine/VM and
-avoid placing unrelated credentials in the agent environment.
+The default OpenStack VM is the outer isolation boundary for the coding agent;
+vulnerable targets and triggers must still run only in the inner NICE Archive
+VMs required by `AGENTS.md`. Avoid placing unrelated credentials in `.env`.
+The application credential is used only by the host OpenStack client and is
+excluded from repository transfer and Git.
 
-## 11. Stopping a batch
+## 12. Stopping a batch
 
 Press Ctrl-C once to request a coordinated shutdown. The orchestrator cancels
-CVEs that have not started, sends SIGTERM to every active OpenCode process
-group, writes interrupted state/result metadata where possible, and exits with
-code 130. Partially completed CVE copies are retained for `--resume`.
+CVEs that have not started and sends SIGTERM to active local or SSH process
+groups. OpenStack workers attempt a final result sync and VM/keypair deletion,
+unless `--openstack-keep-vm` requested intentional retention;
+local workers retain interrupted copies. The batch exits with code 130.
 
 Press Ctrl-C a second time to force-kill active OpenCode process groups with
 SIGKILL.
@@ -540,7 +696,7 @@ cve-orchestrator cves.txt \
   --resume
 ```
 
-## 12. Independent LLM recipe evaluation
+## 13. Independent LLM recipe evaluation
 
 Enable a distinct reviewer process for each reproduction that finishes with
 `status=success`:
@@ -664,7 +820,7 @@ Detached and inline evaluations use the same recipe-only documentation/evidence 
 including when a worktree was retained. Existing evaluations keep their prior
 rubric and verdict until explicitly replaced with `--reevaluate`.
 
-## 13. Random human-review sample
+## 14. Random human-review sample
 
 Print a random subset of successful, artifact-backed recipes after the batch:
 

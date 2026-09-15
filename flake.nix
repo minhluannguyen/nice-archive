@@ -36,8 +36,13 @@
           ]);
 
           runtimePackages = with pkgs; [
+            git
             nix
+            openstackclient
             openssh
+            sshpass
+            rsync
+            gnutar
             terminator
             xterm
           ];
