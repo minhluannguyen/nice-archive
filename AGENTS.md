@@ -35,6 +35,9 @@ the API reference in
 - `nix develop`, `nix-shell`, and Nix build sandboxing are dependency or build
   environments, not execution boundaries for the target or trigger. If the
   lab cannot be established, stop before the trigger and report the blocker.
+- An ephemeral outer orchestrator VM isolates concurrent coding-agent jobs but
+  does not replace the inner NICE Archive VM/container required for the target
+  and trigger. Never execute the vulnerable target directly in that outer VM.
 - Inspect fetched PoCs and historical software before guest execution. Do not
   change global configuration, use destructive Git commands, or modify
   unrelated cases or projects.
