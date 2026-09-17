@@ -92,7 +92,8 @@ CVE, attempt, elapsed time, logical step, active tool/command, the last ten
 sanitized command-output lines, and live budget usage. The full raw streams are
 still written to the attempt artifacts. Use `--live` to force concise
 state-change output when stderr is not a TTY, or `--no-live` for quiet batch
-logs.
+logs. OpenCode stderr and provider-stall warnings remain visible and persisted
+even with `--no-live`, so remote workers do not fail silently.
 
 Inside either backend, the job uses a repository copy with its own `.git`
 metadata so existing status/diff evidence collection continues to work. The
@@ -226,6 +227,18 @@ The flake includes Nixpkgs' `opencode` package, which provides the `opencode`
 binary used by default. The orchestrator loads simple `KEY=VALUE` entries from
 the repository `.env` and passes that environment to `opencode run`, so provider
 API keys can be stored there.
+
+Every OpenCode invocation enables `--print-logs`: normal runs use OpenCode's
+`INFO` log level and `--debug` runs use `DEBUG`. This makes provider connection,
+authentication, request, and plugin diagnostics available in the per-attempt
+`opencode-stderr.log` and the orchestrator's live output instead of leaving an
+apparently silent process.
+
+Prompts are never interpolated into a shell command or placed in OpenCode's
+argument vector. The orchestrator writes the exact UTF-8 prompt to `prompt.md`
+and supplies that file as the child process's standard input while launching
+OpenCode with `shell=False`. This preserves quotes, backslashes, newlines, JSON,
+and shell metacharacters verbatim and avoids command-line length limits.
 
 The repository includes `.opencode/agents/cve-reproducer.md`. OpenCode 1.18.18
 loads it as a primary agent with `steps: 40`; it also denies standalone
@@ -391,6 +404,7 @@ nice-archive/
         │   └── llm-logs/
         │       ├── attempt-01/
         │       │   ├── result.json
+        │       │   ├── prompt.md
         │       │   ├── command.json
         │       │   ├── EXPERIMENT_RESULT.json
         │       │   ├── opencode-output.jsonl
@@ -608,7 +622,19 @@ On a normal terminal, running attempts show a compact dashboard such as:
 The dashboard is refreshed in place and colored only on TTYs (unless
 `NO_COLOR` is set). Non-interactive logs receive concise state changes plus an
 occasional compact snapshot. Secrets matching common OpenRouter, GitHub PAT,
-and bearer-token forms are redacted in this live view.
+and bearer-token forms are redacted in this live view. OpenCode stderr is
+forwarded to the orchestrator output as it arrives and remains stored in the
+attempt's `opencode-stderr.log`. If a live OpenCode process produces neither
+stdout nor stderr for 30 seconds, the orchestrator records and displays a
+possible provider-stall warning, repeating it at most once per minute until
+output resumes or the configured attempt timeout stops the process.
+
+For OpenStack workers, the host synchronizes attempt artifacts every five
+seconds and incrementally feeds new `opencode-output.jsonl` events into the
+same dashboard tracker. Current tool names, commands, recent tool output, LLM
+calls, and token counters therefore reflect work running inside the experiment
+VM rather than only the outer SSH process. Routine OpenCode `INFO` diagnostics
+remain in the stderr artifact without replacing tool output in the dashboard.
 
 ## 9. OpenRouter metadata caveat
 
