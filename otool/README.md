@@ -114,6 +114,83 @@ the `</scenario-command-output>` marker, and enters `:quit` before waiting for
 the scenario process to exit. The status JSON supplies lifecycle state and
 verified SSH commands without requiring repeated transcript reads.
 
+## Budget limits and limitations
+
+All execution limits and their configuration are listed here. Cost is shared
+across a CVE; call and input-token budgets reset for each reproduction attempt.
+
+| Limit | Default | Configuration and scope |
+| --- | --- | --- |
+| Reported LLM cost | US$2 | `--max-cost-usd AMOUNT`; per CVE across reproduction, retries, resumes, README metadata and evaluation. Use `free` for a free model. |
+| LLM calls | 400 | `--max-llm-calls`; per reproduction attempt; `0` disables. Counts unique `step_finish`/usage records. |
+| Input tokens | 5,000,000 | `--max-input-tokens`; per reproduction attempt; `0` disables. Cached input is excluded. |
+| Attempt duration | 120 minutes | `--timeout-minutes`; one reproduction attempt. |
+| Additional attempts | 0 | `--retries`; only eligible transient failures are retried. |
+| Evaluation duration | 90 minutes | `--evaluation-timeout-minutes`; one independent recipe evaluation. |
+| README metadata duration | 300 seconds | `CVE_ORCHESTRATOR_METADATA_TIMEOUT_SECONDS`; allowed range 1–300. |
+| OpenStack provisioning | 15 minutes | `--openstack-provision-timeout-minutes`; VM creation. |
+| SSH readiness | 10 minutes | `--openstack-ssh-timeout-minutes`; waiting for worker SSH. |
+| Concurrent CVEs | 2 | `--workers`; at least 1. Each CVE has its own cost budget. |
+| Bundled agent steps | 400 | `steps` in `.opencode/agents/cve-reproducer.md`; separate from the orchestrator's call counter. |
+| Compaction reserve | 20,000 tokens | `compaction.reserved` in `.opencode/opencode.json`; automatic compaction and old tool-output pruning are enabled. |
+
+Example overrides belong to the run command:
+
+```bash
+cve-orchestrator cves.txt \
+  --max-llm-calls 400 \
+  --max-input-tokens 5000000 \
+  --timeout-minutes 120 \
+  --retries 1 \
+  --evaluate-recipes \
+  --evaluation-timeout-minutes 90
+```
+
+The live guard counts usage as JSONL arrives. Exceeding a call or input-token
+budget, or reaching the cost threshold, terminates the active OpenCode process
+group and records `status=budget_exceeded`. Raw logs and partial work are
+preserved. Final post-exit telemetry is parsed independently. Call and
+input-token limits do not apply to the metadata or evaluation agents; those
+stages share the cost budget and have their own timeouts.
+
+Retries are eligible only for recognized transient provider or orchestrator
+failures, such as rate limiting or temporary gateway failures. Success,
+reproduction failure, inconclusive, budget-exceeded, interrupted and timeout
+attempts are never automatically retried. The cost guard can also prevent an
+otherwise eligible retry when final spending is unknown.
+
+`cost-budget.json` persists the per-CVE balance across retries and resumes,
+including replacement OpenStack workers. State, handoff JSON and CSV expose
+the balance and stop reason. OpenCode must supply valid positive per-generation
+USD costs by default: missing, zero, negative or non-finite costs stop the CVE with
+`cost_unavailable`. Configure accurate model pricing before running. Existing
+logs are imported when the ledger is first created; old unpriced logs also
+block further paid work. Abnormal agent exits block further calls because
+final usage may be missing.
+
+For a free model, pass `--max-cost-usd free`. Explicit zero costs are accepted;
+positive costs stop the run with `unexpected_cost`, while missing or invalid
+costs remain blocked. This setting applies to all agent stages and is forwarded
+to OpenStack workers. On resume, saved zero-cost rejections are cleared only
+when retained usage events all report explicit zero costs. Other limits still
+apply. For example:
+
+```bash
+cve-orchestrator cves/llm-experiment/cves.txt --max-cost-usd free --resume
+```
+
+The cost threshold is **not a guaranteed billing ceiling**. Usage arrives
+after a request finishes, so an in-flight request can exceed the remaining
+balance. An absolute financial ceiling requires a provider-enforced per-CVE
+spending cap; the orchestrator does not create provider keys or configure such
+caps. Cloud VM charges are excluded.
+
+Provider context and output-token limits are separate from cumulative attempt
+budgets and depend on the selected model. The compaction reserve does not
+increase the provider's context window. A silent OpenCode process produces a
+stall warning after 30 seconds, repeated at most once per minute; silence alone
+does not terminate it. Its configured timeout still applies.
+
 ## 1. Prepare the CVE list
 
 ```text
@@ -240,12 +317,10 @@ and supplies that file as the child process's standard input while launching
 OpenCode with `shell=False`. This preserves quotes, backslashes, newlines, JSON,
 and shell metacharacters verbatim and avoids command-line length limits.
 
-The repository includes `.opencode/agents/cve-reproducer.md`. OpenCode 1.18.18
-loads it as a primary agent with `steps: 40`; it also denies standalone
-`sleep *` Bash commands while retaining Bash and all PTY tools. The agent uses
-`pty_spawn(notifyOnExit=true)` for long jobs and waits for `<pty_exited>` rather
-than polling. `.opencode/opencode.json` enables automatic compaction, old tool
-output pruning, and a 20,000-token reserve. The orchestrator selects this agent
+The repository includes `.opencode/agents/cve-reproducer.md` as a primary agent.
+It denies standalone `sleep *` Bash commands while retaining Bash and all PTY
+tools. The agent uses `pty_spawn(notifyOnExit=true)` for long jobs and waits for
+`<pty_exited>` rather than polling. The orchestrator selects this agent
 unless `--agent` or `OPENCODE_AGENT` selects another one. Unless the caller has
 already set `OPENCODE_CONFIG_DIR`, it points OpenCode at this repository config
 so the bundled agent is also available to resumed copies made by older runs.
@@ -324,10 +399,6 @@ Run:
 cve-orchestrator cves.txt \
   --repo /home/lundi3691/study/phd/nice-archive \
   --workers 2 \
-  --timeout-minutes 120 \
-  --retries 0 \
-  --max-llm-calls 300 \
-  --max-input-tokens 4000000 \
   --model deepseek/deepseek-v4-flash-0731 \
   --effort high \
   --resume
@@ -343,14 +414,6 @@ opencode run --format json --auto \
 ```
 
 Use `--agent AGENT_ID` to select another configured OpenCode agent.
-
-The live guard counts each unique `step_finish`/usage generation once as JSONL
-arrives. Cache reads are reported separately and do not inflate the input-token
-budget. Defaults are 300 LLM calls and 4,000,000 non-cached input tokens per
-reproduction attempt; `0` disables either limit. Crossing a limit displays
-`BUDGET EXCEEDED`, terminates the OpenCode process group, preserves raw logs and
-partial work, and records `status=budget_exceeded`. Final post-exit telemetry is
-still parsed independently and remains authoritative.
 
 ## 5. Results
 
@@ -488,8 +551,7 @@ metadata-pass status.
 
 Configuration is inherited from the generator, with optional environment
 overrides: `CVE_ORCHESTRATOR_METADATA_MODEL`,
-`CVE_ORCHESTRATOR_METADATA_AGENT`, `CVE_ORCHESTRATOR_METADATA_EFFORT`, and
-`CVE_ORCHESTRATOR_METADATA_TIMEOUT_SECONDS` (1–300; default 300). Provider keys
+`CVE_ORCHESTRATOR_METADATA_AGENT`, and `CVE_ORCHESTRATOR_METADATA_EFFORT`. Provider keys
 come from the same process environment. Interrupted reproductions and cases
 without a single README are skipped. Detached evaluation and resume-skipped
 results do not retroactively edit existing README files.
@@ -587,11 +649,7 @@ Resume modes:
 - `existing`: skip any CVE that already has a `state.json`, even if the state
   cannot be parsed.
 
-`--retries` defaults to zero. When nonzero, retries are used only for recognized
-transient provider or orchestrator failures (for example rate limiting or a
-temporary gateway failure). Success, reproduction failure, inconclusive,
-budget-exceeded, interrupted, and timeout attempts are never automatically
-retried. OpenStack retries within one CVE invocation stay on that CVE's VM; a
+OpenStack retries within one CVE invocation stay on that CVE's VM; a
 later resumed non-terminal CVE starts in a fresh VM using the host repository
 state. The backend best-effort synchronizes partial results before destroying an
 interrupted VM. Local retries build on the same copy, and local interruption
@@ -615,7 +673,7 @@ On a normal terminal, running attempts show a compact dashboard such as:
 │ Output:
 │   machine # booting QEMU...
 │   machine # waiting for multi-user.target
-│ LLM: 27/300 calls   Input: 1.74M/4.00M   Cached: 320.0k
+│ LLM: 27 calls   Input: 1.74M   Cached: 320.0k
 └───────────────────────────────────────────────────────────────
 ```
 
@@ -624,10 +682,7 @@ The dashboard is refreshed in place and colored only on TTYs (unless
 occasional compact snapshot. Secrets matching common OpenRouter, GitHub PAT,
 and bearer-token forms are redacted in this live view. OpenCode stderr is
 forwarded to the orchestrator output as it arrives and remains stored in the
-attempt's `opencode-stderr.log`. If a live OpenCode process produces neither
-stdout nor stderr for 30 seconds, the orchestrator records and displays a
-possible provider-stall warning, repeating it at most once per minute until
-output resumes or the configured attempt timeout stops the process.
+attempt's `opencode-stderr.log`. Provider-stall warnings also appear here.
 
 For OpenStack workers, the host synchronizes attempt artifacts every five
 seconds and incrementally feeds new `opencode-output.jsonl` events into the
@@ -657,8 +712,6 @@ cve-orchestrator \
   --dry-run metadata \
   --execution-backend local \
   --workers 1 \
-  --timeout-minutes 5 \
-  --retries 0 \
   --results /tmp/otool-probe-results \
   --worktree-root /tmp/otool-probe-copies
 ```
@@ -704,8 +757,6 @@ head -n 1 cves.txt > one-cve.txt
 cve-orchestrator one-cve.txt \
   --repo /path/to/repo \
   --workers 1 \
-  --timeout-minutes 120 \
-  --retries 0 \
   --model deepseek/deepseek-v4-flash-0731
 ```
 
@@ -715,8 +766,6 @@ Then scale gradually:
 cve-orchestrator cves.txt \
   --repo /path/to/repo \
   --workers 3 \
-  --timeout-minutes 120 \
-  --retries 1 \
   --model deepseek/deepseek-v4-flash-0731 \
   --effort high \
   --resume
@@ -729,8 +778,7 @@ Enable a distinct reviewer process for each reproduction that finishes with
 
 ```bash
 cve-orchestrator cves.txt \
-  --evaluate-recipes \
-  --evaluation-timeout-minutes 90
+  --evaluate-recipes
 ```
 
 Set generator and reviewer runtime configuration in `.env` or the process

@@ -14,5 +14,5 @@ target
 *.log
 scenario-*.status.json
 
-cves/llm-experiment/
+cves/llm-experiment*/
 .nice-archive-scenario.lock

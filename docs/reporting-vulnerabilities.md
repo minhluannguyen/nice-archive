@@ -231,11 +231,7 @@ controlling isolated environments.
 
 Before executing target software, a PoC, malformed input, crash test, or
 resource-exhaustion trigger, state the selected boundary and confirm the
-command runs inside it. Prefer NixOS test or standalone VMs. Containers are
-appropriate only for user-space flaws that cannot affect the host kernel,
-container runtime, devices, or host privileges. Kernel bugs, local privilege
-escalation, system services, destructive tests, resource exhaustion, and
-uncertain PoCs require a VM.
+command runs inside it. Prefer NixOS test or standalone VMs.
 
 `nix-shell` and `nix develop` isolate dependencies but are not security
 boundaries. They can build or launch a lab; they do not make host execution of
@@ -258,8 +254,6 @@ Archive only when all of the following are true:
 - the vulnerable target runs on Linux;
 - the affected behavior and its required configuration apply to the Linux
   build;
-- vulnerable and fixed behavior can reasonably be represented with Nix,
-  NixOS, Linux VMs, or a suitable Linux container; and
 - a deterministic, machine-checkable Linux-side oracle is possible.
 
 For cross-platform software, verify from authoritative evidence that the Linux
@@ -688,8 +682,7 @@ or old NixOS releases where the modern NixOS test framework did not yet exist
 or did not have the features needed by the reproduction.
 
 Also remember the Git behavior of flakes: files must be visible to Git before
-Nix copies the flake source into the store. The Flakes wiki calls this out
-explicitly. The NICE Archive CLI stages the selected case before flake-based
+Nix copies the flake source into the store. The NICE Archive CLI stages the selected case before flake-based
 test/scenario runs, but you should still review `git status`.
 
 ### Package variant
