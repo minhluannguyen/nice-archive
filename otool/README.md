@@ -88,12 +88,16 @@ OpenCode output. Otherwise, sequential runs can still record an API-key spend
 delta.
 
 While jobs are running, the orchestrator shows one vertical block per worker:
-CVE, attempt, elapsed time, logical step, active tool/command, the last ten
+CVE, attempt, elapsed time, phase, active tool/command, the last ten
 sanitized command-output lines, and live budget usage. The full raw streams are
 still written to the attempt artifacts. Use `--live` to force concise
 state-change output when stderr is not a TTY, or `--no-live` for quiet batch
 logs. OpenCode stderr and provider-stall warnings remain visible and persisted
 even with `--no-live`, so remote workers do not fail silently.
+When the blocks exceed the terminal height, the display switches to two lines
+per CVE (status and phase) and rotates through pages that fit the available
+rows. The phase is inferred from recognizable reproduction activity; commands
+and tool descriptions stay in their own fields and do not replace it.
 
 Inside either backend, the job uses a repository copy with its own `.git`
 metadata so existing status/diff evidence collection continues to work. The
@@ -669,7 +673,7 @@ On a normal terminal, running attempts show a compact dashboard such as:
 | OpenCode live  active=2/5  workers=2  15:42:10
 ────────────────────────────────────────────────────────────────
 ┌─ CVE-2024-23334  attempt 1  03:14  RUNNING ───────────────────
-│ Step: Testing vulnerable behavior
+│ Phase: Testing vulnerable behavior
 │ Tool: pty_spawn
 │ Cmd : nix run . -- test --case cve-2024-23334 ...
 │
