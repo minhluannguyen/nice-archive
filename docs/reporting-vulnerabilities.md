@@ -66,22 +66,25 @@ If you are an LLM agent working on a new report, follow this order:
    verified package pins before considering a source build.
 5. Design the minimum topology, target-unique marker, two-variant oracle, and
    appropriate generator.
-6. Implement the Nix files, role-organized trigger, initial `test.py`, and
-   initial README.
+6. Implement the Nix files, role-organized trigger, minimal `test.py` scaffold,
+   and initial README.
 7. Evaluate the generated outputs and independently confirm package versions.
-8. Start the vulnerable VM scenario with a scenario subagent only when the
-   capability gate passes; otherwise, the main agent owns the managed scenario.
+8. Start the 40-minute manual-validation clock with the first vulnerable VM
+   scenario. Use a scenario subagent only when the capability gate passes;
+   otherwise, the main agent owns the managed scenario.
    Use standalone VMs only after confirming scenario mode cannot run the lab.
 9. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
    shell to reproduce the vulnerable behavior manually.
-10. Repeat the identical manual trigger against the fixed scenario.
-11. Refine `test.py` from the observed workflow and end each branch with a
-    suitable `assertion_blocks` helper.
-12. Run vulnerable and fixed tests with finite timeouts, preferably through
-    test-runner subagents while the main agent monitors progress.
-13. Update the case README with verified commands, assertions, and LLM
+10. Attempt the identical manual trigger against the fixed scenario. Stop
+    manual work at 40 minutes and record any unresolved observation.
+11. Run `nice-archive begin-test-phase` before writing or refining `test.py`
+    after manual validation. In that one 30-minute phase, run both variants
+    with finite timeouts, and fix failures while time remains.
+    Use a suitable `assertion_blocks` helper and, when applicable, test-runner
+    subagents while the main agent monitors progress.
+12. Update the case README with verified commands, assertions, and LLM
     reproduction metadata.
-14. Report exactly what changed and what was verified.
+13. Report exactly what changed and what was verified.
 
 ## LLM reproduction contract
 
@@ -162,7 +165,16 @@ Enforce these hard wall-clock limits from process launch:
 | Ordinary command | 5 minutes |
 | VM or service readiness | 5 minutes |
 | Complete NixOS test, including build and execution | 30 minutes |
-| Complete interactive scenario, including startup, validation, and cleanup | 45 minutes |
+| One interactive scenario call, including startup, validation, and cleanup | 10 minutes |
+| Manual validation across scenario calls, from the first launch | 40 minutes |
+| Automated-test phase: write, run both variants, and fix `test.py` | 30 minutes |
+
+When manual validation reaches 40 minutes, terminate its owned scenarios and
+continue with the automated-test phase. Record incomplete manual evidence
+plainly. Start the 30-minute test-phase budget with
+`nice-archive begin-test-phase` before editing `test.py` after manual validation.
+It includes both complete automated variants and debugging. Do not reset either
+phase budget by restarting a command.
 
 Set both the command tool deadline and a process-level watchdog where
 available. Do not extend a running deadline or restart merely to reset it.
@@ -198,7 +210,7 @@ For manual validation, use this pattern when practical:
    --popup false --log file <variant-log> --status-file <variant-status.json>`
    in a dedicated scenario subagent. The subagent should keep
    the scenario running as a managed session, capture the printed SSH commands,
-   and report readiness plus new output. Apply the 45-minute process-level
+   and report readiness plus new output. Apply the 10-minute process-level
    deadline from launch.
 2. Spawn one or more VM-operator subagents to connect with the printed SSH
    commands. They should run bounded guest-side health checks, execute the
@@ -220,7 +232,8 @@ whether the test is stuck under the two-minute polling and five-minute
 inactivity watchdog. If the watchdog fires, the main agent instructs the
 subagent to interrupt or terminate the test, or terminates the managed session
 itself. Otherwise, the main agent owns the managed test command. Apply the
-30-minute process-level deadline from launch.
+remaining time in the 30-minute automated-test phase as the process-level
+deadline from launch.
 
 ### Isolation gate
 
@@ -1103,9 +1116,11 @@ shell-level timeout only below the test-driver API or when no native timeout
 parameter exists, and document that exception. Bound custom retry loops by
 elapsed time or attempt count. VM and service readiness must fail after five
 minutes. Complete CLI-driven NixOS tests, including initial downloads and
-builds, must fail after 30 minutes. Interactive scenarios must terminate after
-45 minutes. Host-side shell `timeout` around the complete `nice-archive`
-command remains the process watchdog; it is distinct from guest-command
+builds, must fail after 30 minutes and within the remaining automated-test
+phase budget. Each interactive scenario call must terminate after 10 minutes.
+The `nice-archive scenario` command enforces this limit and reserves
+the final 30 seconds for shutdown. Host-side shell `timeout` around the complete
+`nice-archive` command remains the process watchdog; it is distinct from guest-command
 timeouts in `test.py`. The two-minute polling and five-minute inactivity cutoff
 still apply and may terminate an operation earlier. On timeout, collect
 diagnostics and fail clearly; never count a timeout alone as a passing fixed
@@ -1752,7 +1767,8 @@ Before considering the report done:
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
 - [ ] Ordinary commands, readiness checks, complete tests, and scenarios obey
-      the 5/5/30/45-minute hard limits.
+      their five-, 30-, and 10-minute limits; manual validation and the full
+      automated-test phase obey their 40- and 30-minute budgets.
 - [ ] Managed sessions are polled at least every two minutes and terminated
       after five minutes without meaningful output or a bounded response.
 - [ ] Final scenarios, standalone VMs, applicable flake updates, and

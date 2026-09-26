@@ -129,6 +129,9 @@ across a CVE; call and input-token budgets reset for each reproduction attempt.
 | LLM calls | 400 | `--max-llm-calls`; per reproduction attempt; `0` disables. Counts unique `step_finish`/usage records. |
 | Input tokens | 5,000,000 | `--max-input-tokens`; per reproduction attempt; `0` disables. Cached input is excluded. |
 | Attempt duration | 120 minutes | `--timeout-minutes`; one reproduction attempt. |
+| Interactive scenario | 10 minutes per call | Enforced by `nice-archive scenario` inside an attempt, including startup and bounded shutdown. |
+| Manual validation | 40 minutes | Starts with the first scenario call; later calls cannot exceed the shared deadline, and no scenario can start after it. |
+| Automated-test phase | 30 minutes | Starts with `nice-archive begin-test-phase` before writing or refining `test.py`; the first `nice-archive test` starts it if missed. The worker orchestrator terminates the attempt at expiry. |
 | OpenStack timeout grace | 5 minutes | Independent host watchdog for reproduction and evaluation; after the active phase deadline plus grace, recover artifacts and delete the worker VM and keypair, even with `--openstack-keep-vm`. |
 | Additional attempts | 0 | `--retries`; only eligible transient failures are retried. |
 | Evaluation duration | 30 minutes | `--evaluation-timeout-minutes`; one independent recipe evaluation. |

@@ -96,7 +96,15 @@ limits from launch:
 | Ordinary command | 5 minutes |
 | VM or service readiness | 5 minutes |
 | Complete NixOS test | 30 minutes |
-| Complete interactive scenario | 45 minutes |
+| Complete interactive scenario call | 10 minutes |
+| Manual validation phase, from the first scenario launch | 40 minutes |
+| Automated test phase, including writing, running, and fixing `test.py` | 30 minutes |
+
+At the 40-minute manual-phase deadline, stop the scenarios and proceed to the
+automated test phase even if manual vulnerable/fixed behavior remains unresolved.
+Record what was observed and what was not. Start the 30-minute automated-test
+budget when work on the test oracle begins after manual validation; both
+variants and any fixes must fit within it. A timeout is never passing evidence.
 
 Run commands that may exceed two minutes as managed sessions. Poll at least
 every two minutes and terminate after five continuous minutes without new
@@ -220,15 +228,19 @@ Then work in this order:
 2. Research affected/fixed behavior, PoC provenance, Linux applicability, and
    verified package pins.
 3. Design the minimum topology, target-unique marker, and two-variant oracle.
-4. Implement the flake, VM modules, role-organized trigger, `test.py`, and
-   initial README.
+4. Implement the flake, VM modules, role-organized trigger, a minimal `test.py`
+   scaffold needed for evaluation, and initial README.
 5. Evaluate outputs and independently confirm package versions.
-6. Start the vulnerable scenario through the NICE Archive CLI and manually
-   observe the trigger inside the isolated lab.
-7. Repeat the identical manual trigger against the fixed scenario.
-8. Encode or refine the observed flow in `test.py`.
-9. Run both complete automated variants through `nice-archive test`.
-10. Update only verified README results, clean generated artifacts, review the
+6. Start the 40-minute manual-validation clock with the first scenario through
+   the NICE Archive CLI; each scenario call has a 10-minute ceiling. Attempt
+   to observe the trigger inside the isolated lab.
+7. Attempt the identical manual trigger against the fixed scenario. At the
+   manual-phase deadline, stop manual work and move on even if either branch is
+   unresolved; record the limitation.
+8. Run `nice-archive begin-test-phase` before writing or refining `test.py`
+   after manual validation. Within that one 30-minute phase, run both variants
+   through `nice-archive test`, and fix failures if time permits.
+9. Update only verified README results, clean generated artifacts, review the
     Git index, and run `git status --short` again.
 
 Use the NICE Archive CLI from the repository root whenever it supports the
@@ -275,7 +287,8 @@ The task is complete only when all applicable items are true:
 - the topology preserves every required security boundary while omitting
   unnecessary machines;
 - manual vulnerable and fixed behavior was observed in an isolated lab using
-  the same trigger;
+  the same trigger, or the 40-minute manual phase was exhausted and the missing
+  observations were recorded without claiming manual success;
 - vulnerable and fixed automated tests both ran and passed;
 - commands, waits, tests, scenarios, and managed-session monitoring obeyed the
   required bounds;

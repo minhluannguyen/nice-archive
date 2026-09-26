@@ -213,7 +213,9 @@ server.succeed("journalctl -u <unit> --no-pager")
 ```
 
 Exit the scenario with `Ctrl+D` in the scenario terminal and choose to kill the
-VMs.
+VMs. The CLI stops each interactive scenario after 10 minutes from launch,
+including startup and bounded VM shutdown, and records `timeout` in its status
+file when one was requested.
 
 The CLI takes an exclusive file lock before starting a scenario and releases it
 when the scenario exits. By default the lock is

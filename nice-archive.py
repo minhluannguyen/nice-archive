@@ -13,6 +13,7 @@ import shlex
 import os
 import fcntl
 import select
+import signal
 from contextlib import contextmanager
 from pathlib import Path
 import time
@@ -65,6 +66,11 @@ ALL_CASES = "__all_cases__"
 DEFAULT_TEST_LOG_TAIL_LINES = 100
 DEFAULT_SCENARIO_RESPONSE_CHARS = 8000
 DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS = 300
+MAX_SCENARIO_DURATION_SECONDS = 10 * 60
+SCENARIO_SHUTDOWN_SECONDS = 30
+MANUAL_PHASE_SECONDS = 40 * 60
+AUTOMATED_TEST_PHASE_SECONDS = 30 * 60
+PHASE_BUDGET_ENV = "NICE_ARCHIVE_PHASE_BUDGET_FILE"
 LOG_LIVE = "live"
 LOG_FILE = "file"
 LOG_NONE = "none"
@@ -72,6 +78,38 @@ LOG_MODES = {LOG_LIVE, LOG_FILE, LOG_NONE}
 SCENARIO_LOCK_ENV = "NICE_ARCHIVE_SCENARIO_LOCK"
 DEFAULT_SCENARIO_LOCK_PATH = USER_DIR / ".nice-archive-scenario.lock"
 DISABLED_SCENARIO_LOCK_VALUES = {"", "0", "false", "off", "none", "disabled"}
+
+
+class ScenarioDeadlineExceeded(BaseException):
+    """Interrupt scenario work even when a helper catches ordinary errors."""
+
+
+def start_phase_budget(phase: str) -> float | None:
+    """Start or inspect one per-attempt clock shared by CLI invocations."""
+    location = os.environ.get(PHASE_BUDGET_ENV)
+    if not location:
+        return None
+    path = Path(location)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = "manual_started" if phase == "manual" else "test_started"
+    limit = MANUAL_PHASE_SECONDS if phase == "manual" else AUTOMATED_TEST_PHASE_SECONDS
+    with path.with_suffix(".lock").open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                record = {}
+            if phase == "manual" and "test_started" in record:
+                return 0.0
+            if key not in record:
+                record[key] = time.monotonic()
+                temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+                temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+                temporary.replace(path)
+            return max(0.0, limit - (time.monotonic() - float(record[key])))
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 def resolve_scenario_lock_path() -> Path | None:
     lock_value = os.environ.get(SCENARIO_LOCK_ENV)
@@ -354,6 +392,10 @@ def run_single_test(
         raise ValueError(f"Unsupported test log mode: {log_mode}")
     if log_mode != LOG_FILE and log_file is not None:
         raise ValueError("A custom log filename requires file logging mode")
+
+    test_remaining = start_phase_budget("test")
+    if test_remaining is not None and test_remaining <= 0:
+        error("The 30-minute automated-test phase is exhausted")
 
     case_name = case_dir.name
     info(f"Testing: {case_name}")
@@ -757,18 +799,44 @@ def start_scenario_case(
     status_file: str | None = None,
     command_timeout: float = DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS,
 ) -> bool:
-    with scenario_lock():
-        return start_scenario_case_unlocked(
-            case_dir,
-            isVulnerable=isVulnerable,
-            system=system,
-            popup=popup,
-            terminal=terminal,
-            log_mode=log_mode,
-            log_file=log_file,
-            status_file=status_file,
-            command_timeout=command_timeout,
-        )
+    manual_remaining = start_phase_budget("manual")
+    allowed_seconds = (
+        min(MAX_SCENARIO_DURATION_SECONDS, manual_remaining)
+        if manual_remaining is not None
+        else MAX_SCENARIO_DURATION_SECONDS
+    )
+    if allowed_seconds <= SCENARIO_SHUTDOWN_SECONDS:
+        error("The 40-minute manual-validation budget is exhausted; move to the automated test phase")
+
+    def scenario_deadline(_signum, _frame):
+        raise ScenarioDeadlineExceeded("Interactive scenario reached its call or manual-phase deadline; stopping its VMs")
+
+    started = time.monotonic()
+    previous_handler = signal.signal(signal.SIGALRM, scenario_deadline)
+    previous_timer = signal.setitimer(
+        signal.ITIMER_REAL, allowed_seconds - SCENARIO_SHUTDOWN_SECONDS
+    )
+    try:
+        with scenario_lock():
+            return start_scenario_case_unlocked(
+                case_dir,
+                isVulnerable=isVulnerable,
+                system=system,
+                popup=popup,
+                terminal=terminal,
+                log_mode=log_mode,
+                log_file=log_file,
+                status_file=status_file,
+                command_timeout=command_timeout,
+            )
+    except ScenarioDeadlineExceeded as exc:
+        error(str(exc))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        remaining_previous = previous_timer[0] - (time.monotonic() - started)
+        if remaining_previous > 0:
+            signal.setitimer(signal.ITIMER_REAL, remaining_previous, previous_timer[1])
 
 def start_scenario_case_unlocked(
     case_dir: Path,
@@ -930,6 +998,14 @@ def start_scenario_case_unlocked(
         })
         write_scenario_status(resolved_status_path, status)
         raise
+    except ScenarioDeadlineExceeded as e:
+        status.update({
+            "status": "timeout",
+            "error": str(e),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        write_scenario_status(resolved_status_path, status)
+        error(str(e))
     except Exception as e:
         status.update({
             "status": "error",
@@ -940,7 +1016,11 @@ def start_scenario_case_unlocked(
         error(f"Could not start scenario: {e}")
     finally:
         if child is not None and child.isalive():
-            child.close(force=True)
+            try:
+                if status["status"] == "timeout":
+                    stop_scenario_child(child, timeout=SCENARIO_SHUTDOWN_SECONDS - 5)
+            finally:
+                child.close(force=True)
         if transcript is not None:
             transcript.close()
 
@@ -1333,6 +1413,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_cves_parser.set_defaults(action="list_cves", print_help_when_empty=False)
 
+    begin_test_parser = commands.add_parser(
+        "begin-test-phase",
+        help="start the 30-minute automated-test phase in an otool attempt",
+    )
+    begin_test_parser.set_defaults(action="begin_test_phase", print_help_when_empty=False)
+
     test_parser = commands.add_parser(
         "test",
         help="run CVE tests",
@@ -1373,7 +1459,7 @@ tests use live logging and all-case runs suppress test output.""",
     scenario_parser = commands.add_parser(
         "scenario",
         help="start an interactive CVE scenario",
-        description="Start a CVE scenario and attach to the interactive test driver.",
+        description="Start a CVE scenario with a 10-minute limit and attach to the interactive test driver.",
         formatter_class=TestHelpFormatter,
         epilog="""quiet proxy workflow:
   1. Wait for the "scenario> " readiness prompt, then read --status-file.
@@ -1543,6 +1629,16 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
 
     if action == "list_cves":
         return list_cases()
+
+    if action == "begin_test_phase":
+        remaining = start_phase_budget("test")
+        if remaining is None:
+            warning("No otool phase budget is configured for this session")
+        elif remaining <= 0:
+            error("The 30-minute automated-test phase is exhausted")
+        else:
+            info(f"Automated-test phase: {int(remaining)} seconds remaining")
+        return True
 
     if action == "list_vms":
         case_dir = cli_case(
