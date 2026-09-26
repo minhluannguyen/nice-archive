@@ -16,3 +16,5 @@ scenario-*.status.json
 
 cves/llm-experiment*/
 .nice-archive-scenario.lock
+
+.opencode/opencode.json

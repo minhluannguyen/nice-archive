@@ -129,13 +129,14 @@ across a CVE; call and input-token budgets reset for each reproduction attempt.
 | LLM calls | 400 | `--max-llm-calls`; per reproduction attempt; `0` disables. Counts unique `step_finish`/usage records. |
 | Input tokens | 5,000,000 | `--max-input-tokens`; per reproduction attempt; `0` disables. Cached input is excluded. |
 | Attempt duration | 120 minutes | `--timeout-minutes`; one reproduction attempt. |
+| OpenStack timeout grace | 5 minutes | Independent host watchdog for reproduction and evaluation; after the active phase deadline plus grace, recover artifacts and delete the worker VM and keypair, even with `--openstack-keep-vm`. |
 | Additional attempts | 0 | `--retries`; only eligible transient failures are retried. |
-| Evaluation duration | 90 minutes | `--evaluation-timeout-minutes`; one independent recipe evaluation. |
+| Evaluation duration | 30 minutes | `--evaluation-timeout-minutes`; one independent recipe evaluation. |
 | README metadata duration | 300 seconds | `CVE_ORCHESTRATOR_METADATA_TIMEOUT_SECONDS`; allowed range 1–300. |
 | OpenStack provisioning | 15 minutes | `--openstack-provision-timeout-minutes`; VM creation. |
 | SSH readiness | 10 minutes | `--openstack-ssh-timeout-minutes`; waiting for worker SSH. |
 | Concurrent CVEs | 2 | `--workers`; at least 1. Each CVE has its own cost budget. |
-| Bundled agent steps | 400 | `steps` in `.opencode/agents/cve-reproducer.md`; separate from the orchestrator's call counter. |
+| Bundled agent steps | 400 | `steps` in the reproducer and evaluator agent profiles; separate from the orchestrator's call counter. |
 | Compaction reserve | 20,000 tokens | `compaction.reserved` in `.opencode/opencode.json`; automatic compaction and old tool-output pruning are enabled. |
 
 Example overrides belong to the run command:
@@ -147,7 +148,7 @@ cve-orchestrator cves.txt \
   --timeout-minutes 120 \
   --retries 1 \
   --evaluate-recipes \
-  --evaluation-timeout-minutes 90
+  --evaluation-timeout-minutes 30
 ```
 
 The live guard counts usage as JSONL arrives. Exceeding a call or input-token
@@ -214,8 +215,8 @@ Ed25519 OpenStack keypair and one VM per CVE, injects the public key through
 `server create --key-name`, waits for SSH, and transfers a credential-filtered
 copy of the repository, then runs the ordinary local
 orchestrator inside that VM. Reproduction, README metadata finalization, and
-optional recipe evaluation all finish remotely. Result files are synchronized
-to the host every 30 seconds and once more before the VM and keypair are
+optional recipe evaluation all finish remotely. The host attempts to synchronize
+result files every five seconds and once more before the VM and keypair are
 deleted. The OpenRC and generated private key are never uploaded.
 
 Keep the credential host-readable only by its owner:
@@ -346,11 +347,6 @@ OPENCODE_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
 # Optional generator agent and reasoning variant.
 OPENCODE_AGENT=cve-reproducer
 OPENCODE_VARIANT=high
-
-# Optional independent-review overrides. The model value includes its provider.
-CVE_ORCHESTRATOR_EVALUATION_MODEL=anthropic/<reviewer-model>
-CVE_ORCHESTRATOR_EVALUATION_AGENT=cve-reviewer
-CVE_ORCHESTRATOR_EVALUATION_EFFORT=high
 
 # Optional alternative to the OpenRC file. These stay on the host and are
 # removed from the filtered .env uploaded to the worker VM.
@@ -792,7 +788,9 @@ environment. `OPENCODE_MODEL`, `OPENCODE_AGENT`, and `OPENCODE_VARIANT` select
 the generator. `CVE_ORCHESTRATOR_EVALUATION_MODEL`,
 `CVE_ORCHESTRATOR_EVALUATION_AGENT`, and
 `CVE_ORCHESTRATOR_EVALUATION_EFFORT` optionally override those values for the
-reviewer; without overrides, the reviewer inherits the generator settings. The
+reviewer. The reviewer defaults to the dedicated
+[`.opencode/agents/cve-evaluator.md`](../.opencode/agents/cve-evaluator.md) agent;
+only its model and reasoning effort inherit the generator settings. The
 provider is the prefix in the model value, and standard provider credentials
 such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `OPENROUTER_API_KEY` are
 inherited from the same environment. Credentials are never placed in the
@@ -801,28 +799,41 @@ evaluator prompt, command JSON, or environment summary.
 The default evaluator prompt is
 [`cve-recipe-evaluator-prompt.md`](./docs/cve-recipe-evaluator-prompt.md). Use
 `--evaluation-prompt-file` to replace it. A custom prompt can use `{cve}`,
-`{recipe_path}`, `{recipe_inventory}` (embedded JSON), and `{result_path}`.
-The legacy `{artifact_root}` marker aliases the recipe root. The reviewer may
-research external references and run fresh tests; it must keep vulnerable code
-and triggers inside the recipe's declared isolated VM or suitable container.
+`{recipe_path}`, `{recipe_inventory}` (embedded JSON), `{result_path}`,
+`{repository_path}`, and `{timeout_seconds}`. The legacy `{artifact_root}`
+marker aliases the recipe root; `{worktree_path}` names the clean evaluation
+repository.
 
-The orchestrator copies the matching case into `recipe/<case-name>/`, writes
-`evaluation/artifact-inventory.json`, and starts the reviewer there. The reviewer
-checks seven requirements: artifact completeness, case layout, CVE fidelity,
-affected software/version, test quality, and fresh vulnerable and fixed test
-execution. It may inspect advisories, upstream sources, patches, PoCs, and
-Nixpkgs history. Both test variants must be run from clean states and report
-commands, exit codes, and assertion evidence. A blocked or timed-out test is a
-failed execution, not a passing test inferred from old logs.
+With inline evaluation enabled, the worker VM stays alive after reproduction
+and README metadata finalization. A new evaluator process starts with its own
+clock; the phase limits and host cleanup grace are listed in
+[Budget limits and limitations](#budget-limits-and-limitations). Finishing
+reproduction, including a timed-out attempt with a retained recipe, does not
+consume the evaluator's time budget. Once evaluation and final artifact sync
+finish, normal VM cleanup or explicit retention applies.
 
-Rubric version 4 accepts a root Nix entry point such as `flake.nix`,
-`default.nix`, or npins; test files; a README; and VM/NixOS configuration,
-including inline configuration. Exploit and custom package files are required
-only when the reproduction needs them. The deterministic validator checks the
-seven result entries, supporting evidence, both execution records, and verdict
-consistency. Informational concerns and optional documentation fields do not
-override a technically valid PASS. The inventory is a navigation aid rather
-than a second rubric.
+The reviewer starts at the root of a temporary repository containing the
+framework and only the selected recipe at `cves/<case-name>/`. Relative inputs
+such as `../../src` work there. A new Git history replaces the reproduction
+history; previous reports, conversations, logs, credentials files, and scenario
+status files are excluded from the inputs. The agent's evidence scope is this
+repository plus independent external research; the copy is not an OS filesystem
+sandbox. The inner VM/container execution requirements still apply.
+
+After inspecting the recipe and establishing isolation, the evaluator starts
+both bounded test variants and reviews the checklist while they run. It keeps
+separate logs in `evaluation-logs/`, monitors managed processes, collects both
+exit statuses and assertion evidence, and writes `RECIPE_EVALUATION.json` before
+ending its OpenCode run. A final response saying it is waiting does not keep the
+non-interactive process alive. Fresh logs are retained under
+`evaluation/test-logs/`.
+
+The prompt is the authoritative seven-check rubric and JSON contract. The
+validator checks requirement evidence, execution records, and verdict
+consistency. Missing or malformed reports and evaluator process failures are
+`inconclusive`; a valid failed check produces `fail`. A timed-out test cannot
+prove fixed behavior. A missing recipe skips evaluation. The inventory is a
+navigation aid, not a verdict.
 
 After validation, the orchestrator renders `recipe/<case-name>/EVALUATION.md` with the
 reviewer's checklist, fresh test results, concerns, and final status. Inputs
@@ -845,8 +856,9 @@ itself otherwise succeeded.
 
 Use `--evaluate-results` to run evaluation later as a separate batch step. This
 mode reads completed `state.json` files and retained `recipe/` directories from
-`--results`; it does not create workspace copies or start a generator attempt.
-The evaluator still runs both recipe tests:
+`--results` and prepares the same clean evaluation repository without starting
+a generator attempt. This mode runs on the machine invoking the orchestrator,
+so use an isolated research host. The evaluator still runs both recipe tests:
 
 ```bash
 cve-orchestrator \
@@ -856,8 +868,8 @@ cve-orchestrator \
 ```
 
 With no CVE list, every `CVE-*/state.json` under the results directory is
-considered. Any retained recipe is eligible; evaluation is skipped only when shutdown prevents it. Provide a CVE list to
-scope the detached step:
+considered. Any retained recipe is eligible, subject to shutdown and the shared
+cost budget. Provide a CVE list to scope the detached step:
 
 ```bash
 cve-orchestrator selected-cves.txt \
@@ -865,15 +877,10 @@ cve-orchestrator selected-cves.txt \
   --results cves/llm-experiment-results
 ```
 
-Existing evaluations are preserved. Add `--reevaluate` to replace them. The
-detached step updates each selected `state.json`, its README handoff, and
+The detached step updates each selected `state.json`, its README handoff, and
 `summary.csv`, while leaving the original `batch-manifest.json` and
 `batch-summary.json` untouched. Its own run metadata is written to
 `evaluation-batch-manifest.json` and `evaluation-batch-summary.json`.
-
-Detached and inline evaluations use the same fresh-test rubric,
-including when a worktree was retained. Existing evaluations keep their prior
-rubric and verdict until explicitly replaced with `--reevaluate`.
 
 ## 14. Random human-review sample
 
