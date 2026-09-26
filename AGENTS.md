@@ -126,11 +126,15 @@ termination rules are in
 - Search nixpkgs history before building from source. Prefer, in order:
   historical packages with `variant = "package"`; whole-target-VM pinning with
   `variant = "system"`; old-kernel support; then a Nix package that fetches a
-  complete immutable, hash-verified upstream source.
-- Never copy, vendor, reconstruct, or reduce affected-product source into the
-  case. Case-owned Nix expressions, VM configuration, wrappers, tests, and
-  exploit code are allowed. Fetch target patches immutably with verified
-  hashes.
+  complete immutable, hash-verified upstream source. For a source build, use
+  the appropriate nixpkgs ecosystem builder when available (for example,
+  `buildNpmPackage` or `buildMavenPackage`) and pin its external dependencies
+  through the ecosystem's lock or hash mechanism when available.
+- Never extract, copy, vendor, reconstruct, or reduce affected-product source
+  into the case or a recipe for modification. Case-owned Nix expressions, VM
+  configuration, wrappers, tests, and exploit code are allowed. Fetch target
+  patches immutably with verified hashes. Put large or complex packaging-only
+  expressions under `package/`.
 
 See [Package source strategy](./docs/reporting-vulnerabilities.md#package-source-strategy)
 for search commands, pinning patterns, and generator selection.

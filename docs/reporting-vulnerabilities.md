@@ -440,15 +440,15 @@ compatible with package-level pinning. Do not build a specific boundary release
 from source merely because it is the newest affected version.
 
 Never copy, transcribe, extract, vendor, or reconstruct affected-product source
-into the case directory. This includes full source snapshots, individual
-upstream source files, copied functions, and reduced local reimplementations of
-the vulnerable code. Obtain the target from an immutable nixpkgs revision or
-make Nix fetch a complete, hash-verified release, tag, or commit from the
-original upstream project and build it in the sandbox. Nix may unpack that
-fetched source during the build. Case-owned Nix expressions, VM configuration,
-wrappers, tests, and exploit/trigger code remain appropriate. Fetch any needed
-upstream or nixpkgs target patch by immutable URL and verified hash rather than
-copying its source hunks into the case.
+into the case directory or a recipe for modification. This includes full source
+snapshots, individual upstream source files, copied functions, and reduced local
+reimplementations of the vulnerable code. Obtain the target from an immutable
+nixpkgs revision or make Nix fetch a complete, hash-verified release, tag, or
+commit from the original upstream project and build it in the sandbox. Nix may
+unpack that fetched source during the build. Case-owned Nix expressions, VM
+configuration, wrappers, tests, and exploit/trigger code remain appropriate.
+Fetch any needed upstream or nixpkgs target patch by immutable URL and verified
+hash rather than copying its source hunks into the case.
 
 Use this priority order:
 
@@ -497,13 +497,76 @@ by a failed Nix build and then rerun with the verified value. See
    low-level behavior.
 4. Only if no suitable vulnerable or fixed package is available through the
    applicable nixpkgs strategies above, define a package or use `overrideAttrs`
-   to fetch and build the complete original upstream source. See
+   to fetch and build the complete original upstream source. Choose the
+   language-specific nixpkgs builder when one exists: for example,
+   `buildNpmPackage` for npm projects or `buildMavenPackage` for Maven projects;
+   use an appropriate Composer builder for PHP projects when available. Use
+   the project's package-manager lockfile and the builder's dependency hash or
+   other pin mechanism when available. Verify that the lockfile, dependency
+   resolution, and source hash match the selected vulnerable or fixed version;
+   do not let a build silently resolve newer external dependencies. Keep any
+   large or complex packaging configuration in separate Nix files under
+   `package/` or `package/<target>/`, imported by the VM configuration. See
    [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/) for a
    source-build example.
 
 Keep package-selection logic close to the VM that needs it. Avoid moving
 user-space package selection into the top-level `flake.nix` unless the whole
 system pin must change.
+
+#### Examples: packaging upstream projects absent from nixpkgs
+
+This compact npm template shows the two independent pins: the complete
+upstream source and its dependencies. Supply verified values for **both**
+variants; the hashes shown here are placeholders. The fetched source must
+contain its own `package.json` and `package-lock.json`.
+
+```nix
+# package/target.nix
+{ pkgs, isVulnerable }:
+let
+  selected = if isVulnerable then {
+    version = "<affected-version>"; rev = "<affected-commit>";
+    sourceHash = "sha256-<source-hash>"; depsHash = "sha256-<npm-deps-hash>";
+  } else {
+    version = "<fixed-version>"; rev = "<fixed-commit>";
+    sourceHash = "sha256-<source-hash>"; depsHash = "sha256-<npm-deps-hash>";
+  };
+in pkgs.buildNpmPackage {
+  pname = "<project>";
+  inherit (selected) version;
+  src = pkgs.fetchFromGitHub {
+    owner = "<owner>"; repo = "<repo>";
+    inherit (selected) rev;
+    hash = selected.sourceHash;
+  };
+  npmDepsHash = selected.depsHash;
+}
+```
+
+Use the same source-selection pattern with the builder and dependency pin
+appropriate to the project:
+
+| Project | Builder | Dependency pin from fetched upstream source |
+| --- | --- | --- |
+| npm | `pkgs.buildNpmPackage` | `package-lock.json` and `npmDepsHash` |
+| Maven | `pkgs.maven.buildMavenPackage` | Maven dependency resolution and `mvnHash`; add the project's JAR install phase |
+| Composer | `pkgs.php.buildComposerProject2` when present in the pinned nixpkgs | `composer.lock` and `vendorHash` |
+
+Import a large expression in the VM with
+`import ./package/target.nix { inherit pkgs isVulnerable; }`. Check the chosen
+nixpkgs revision for the builder's exact API, and verify both installed versions
+and dependency hashes. Never copy upstream manifests, lockfiles, or source into
+the recipe to modify them.
+
+Existing CVE cases illustrate related choices: [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/curl-7.27.0-package.nix)
+fetches a complete curl release with a source hash; [CVE-2021-44228](../cves/cve-2021-44228-log4shell/exploit/vuln_server/vuln-server-package.nix)
+builds a **guest helper** against separate locked Maven dependency repositories.
+These cases illustrate source acquisition and pinning; neither uses the npm or
+Composer builders in the table. See the
+[nixpkgs npm builder](https://nixos.org/manual/nixpkgs/stable/#javascript-buildNpmPackage)
+and [Maven builder](https://nixos.org/manual/nixpkgs/stable/#maven) references
+for the builder-specific fields.
 
 ### Searching for NixOS options
 

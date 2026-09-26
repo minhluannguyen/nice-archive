@@ -75,7 +75,7 @@ For every attempt it records:
 - best-effort OpenCode input, output, reasoning, cache, total token, cost,
   model, LLM-call, and tool-call metadata from JSON events
 - full OpenCode JSONL output and stderr
-- a complete recipe copy under the canonical per-CVE `recipe/` directory, excluding
+- a complete recipe copy under `recipe/<case-name>/`, excluding
   generated VM images, logs, and other configured artifacts
 - the raw `EXPERIMENT_RESULT.json` copied into each attempt directory
 - an optional, separately validated evaluator verdict and its exact prompt,
@@ -425,7 +425,7 @@ to `/tmp/<repo>-<uid>.cve-copies/CVE-...`; the legacy-named `--worktree-root`
 option overrides that root. The source HEAD identified by `--base-ref` is
 recorded, while the copy contains the source checkout's current filesystem state.
 After the CVE succeeds or the retry policy stops further attempts, the orchestrator copies its
-complete matching case directory directly to `CVE-.../recipe/`. It then removes
+complete matching case directory to `CVE-.../recipe/<case-name>/`. It then removes
 the local workspace copy when that backend's cleanup policy calls for it.
 
 ```text
@@ -448,13 +448,14 @@ nice-archive/
         │   │   └── remote-orchestrator.log
         │   ├── recipe-manifest.json
         │   ├── recipe/
-        │   │   ├── flake.nix
-        │   │   ├── flake.lock
-        │   │   ├── test.py
-        │   │   ├── readme.md
-        │   │   ├── EVALUATION.md
-        │   │   ├── vm-server.nix
-        │   │   └── exploit/...
+        │   │   └── cve-2023-50268-short-name/
+        │   │       ├── flake.nix
+        │   │       ├── flake.lock
+        │   │       ├── test.py
+        │   │       ├── readme.md
+        │   │       ├── EVALUATION.md
+        │   │       ├── vm-server.nix
+        │   │       └── exploit/...
         │   ├── evaluation/
         │   │   ├── artifact-inventory.json
         │   │   ├── prompt.md
@@ -498,8 +499,10 @@ detached evaluation, summaries, and human sampling. The two
 `evaluation-batch-*.json` files exist only after `--evaluate-results`, and
 `human-review-sample.json` exists only when sampling is requested. Readers keep
 compatibility with older root-level `attempt-XX/` and `worktree-snapshot/`
-results, but every new artifact is written only to the canonical layout.
-`recipe/EVALUATION.md` is generated after review; it is not a reproduction input.
+results and older flat `recipe/` copies. New manifests record `recipe_root` as
+the container directory and `recipe_dir` as the nested case directory.
+Every new artifact is written to the canonical layout.
+`recipe/<case-name>/EVALUATION.md` is generated after review; it is not a reproduction input.
 
 `summary.csv` is the easiest file to analyze later. A row includes fields such as:
 
@@ -556,7 +559,7 @@ come from the same process environment. Interrupted reproductions and cases
 without a single README are skipped. Detached evaluation and resume-skipped
 results do not retroactively edit existing README files.
 
-After all attempts finish, the recipe is copied to `recipe/` regardless of the
+After all attempts finish, the recipe is copied to `recipe/<case-name>/` regardless of the
 repository-copy cleanup policy. The legacy-named `--cleanup-worktrees` option
 controls only whether the source copy is then removed; retries never delete or
 recreate it:
@@ -654,7 +657,7 @@ later resumed non-terminal CVE starts in a fresh VM using the host repository
 state. The backend best-effort synchronizes partial results before destroying an
 interrupted VM. Local retries build on the same copy, and local interruption
 retains it. After a local run finishes, the default cleanup policy copies the
-complete CVE recipe to `recipe/` and removes the workspace copy. Use
+complete CVE recipe to `recipe/<case-name>/` and removes the workspace copy. Use
 `--cleanup-worktrees never` to retain completed local copies. The option applies
 only to the local backend and is retained for CLI and result-schema compatibility.
 
@@ -773,8 +776,7 @@ cve-orchestrator cves.txt \
 
 ## 13. Independent LLM recipe evaluation
 
-Enable a distinct reviewer process for each reproduction that finishes with
-`status=success`:
+Enable a distinct reviewer process for each generated recipe:
 
 ```bash
 cve-orchestrator cves.txt \
@@ -796,75 +798,51 @@ The default evaluator prompt is
 [`cve-recipe-evaluator-prompt.md`](./docs/cve-recipe-evaluator-prompt.md). Use
 `--evaluation-prompt-file` to replace it. A custom prompt can use `{cve}`,
 `{recipe_path}`, `{recipe_inventory}` (embedded JSON), and `{result_path}`.
-The legacy `{artifact_root}` marker now aliases the recipe root. Legacy
-`{state_path}`, `{inventory_path}`, and `{worktree_path}` markers yield
-scope/unavailability notices, not external input paths. Every custom prompt
-is prefixed with the same recipe-only scope instruction.
+The legacy `{artifact_root}` marker aliases the recipe root. The reviewer may
+research external references and run fresh tests; it must keep vulnerable code
+and triggers inside the recipe's declared isolated VM or suitable container.
 
-Before review, the orchestrator copies the matching case into `recipe/` and
-writes `evaluation/artifact-inventory.json`. The evaluator inspects that frozen
-recipe only, with its working directory set to the recipe root. The inventory
-is embedded in the prompt so the reviewer need not open external files. It
-reads CVE descriptions, advisory/fix excerpts, and PoC material bundled within
-the recipe as text, then compares
-the documented scope with configuration, installation/version evidence,
-source pins, reproducibility, file layout, and test structure. It records read
-and unverified references separately. External URLs and paths are citations;
-the reviewer does not fetch them, follow outside symlinks, or inspect other
-workspace copies or parent directories.
+The orchestrator copies the matching case into `recipe/<case-name>/`, writes
+`evaluation/artifact-inventory.json`, and starts the reviewer there. The reviewer
+checks seven requirements: artifact completeness, case layout, CVE fidelity,
+affected software/version, test quality, and fresh vulnerable and fixed test
+execution. It may inspect advisories, upstream sources, patches, PoCs, and
+Nixpkgs history. Both test variants must be run from clean states and report
+commands, exit codes, and assertion evidence. A blocked or timed-out test is a
+failed execution, not a passing test inferred from old logs.
 
-Evaluation is a documentation and evidence review. It does not run scenarios,
-tests, builds, services, or PoCs. Automated vulnerable/fixed outcomes are graded
-from evidence included in the recipe, such as bundled logs or specific README
-output excerpts. A bare "tests passed" claim is insufficient; missing evidence
-is `unverified`, without searching external attempt logs.
-Manual observations are not required evaluation checks, although documented
-unsafe historical execution and false statements remain reportable findings.
-Pending telemetry from before OpenCode exited is not a documentation failure
-merely because the orchestrator obtained final figures afterward.
+Rubric version 4 accepts a root Nix entry point such as `flake.nix`,
+`default.nix`, or npins; test files; a README; and VM/NixOS configuration,
+including inline configuration. Exploit and custom package files are required
+only when the reproduction needs them. The deterministic validator checks the
+seven result entries, supporting evidence, both execution records, and verdict
+consistency. Informational concerns and optional documentation fields do not
+override a technically valid PASS. The inventory is a navigation aid rather
+than a second rubric.
 
-Rubric version 3 restricts required artifacts to recipe contents: `flake.nix`,
-`flake.lock`, `test.py`, README, VM/module configuration, and trigger artifacts.
-Orchestrator state, manifests, handoffs, attempt logs, and raw
-`EXPERIMENT_RESULT.json` are not requirements and their absence cannot fail a
-recipe. Legacy snapshot case directories are equally valid recipe roots.
-The orchestrator still uses result state for batch selection and eligibility;
-it does not supply that state as evidence to the reviewer.
+After validation, the orchestrator renders `recipe/<case-name>/EVALUATION.md` with the
+reviewer's checklist, fresh test results, concerns, and final status. Inputs
+are fingerprinted before and after review; changed recipe source files
+invalidate the result. Reevaluation replaces the generated report.
 
-The reviewer may write only `evaluation/RECIPE_EVALUATION.json`; this outside
-path is write-only output. The orchestrator hashes
-the recipe inputs before and after review and invalidates the review
-if they change. Its machine validator requires all eleven named requirement checks,
-valid statuses, evidence for every passing check, list-valued missing-artifact,
-concern, and command fields, and consistent overall verdict logic. It also
-forces a failed evaluation when the deterministic preflight inventory is
-incomplete. Thus an evaluator's prose or self-declared `pass` cannot bypass the
-artifact contract.
-
-After validation, the orchestrator renders `recipe/EVALUATION.md` from the
-JSON, including final status, reviewer summary, a checklist with evidence
-excerpts, missing recipe files, concerns, validation findings, reference notes,
-and review metadata. It shows the validator's final status even when that
-differs from the LLM verdict. The full JSON remains linked for detail.
-This report is written after input-change checks, excluded from subsequent
-inventories, and explicitly ignored by later reviews. Reevaluation replaces
-the generated report. A non-generated file with the same name is preserved
-and recorded as `report_error`. For legacy results the report is written into
-the resolved legacy recipe directory. The path is saved in the evaluation's
-`artifacts.report` field, and consequently in `state.json` and its handoff.
-
-Evaluation is additive: it never changes the reproduction `status`. The
-details are stored in `state.json`, `readme-handoff.*`, `summary.csv`, and the
-`evaluation/` directory. Resume preserves an existing evaluation; pass
-`--reevaluate` together with `--evaluate-recipes` to replace it. When every
-reproduction succeeded but an enabled evaluation failed or was inconclusive,
-the orchestrator exits with status 3 (reproduction failures retain status 2).
+Evaluation is independent of the generator's verdict. Both appear as
+`first_llm_verdict` and `second_evaluate_llm_verdict` in each `state.json`,
+`summary.csv`, and per-CVE entries in `batch-summary.json` or
+`evaluation-batch-summary.json`,
+including when a batch is interrupted. A missing verdict is JSON `null`.
+The generator's `success` and `failure` statuses map to `pass` and `fail`;
+`inconclusive` remains `inconclusive`.
+The detailed evaluation remains in `state.json` and `evaluation/result.json`.
+Existing evaluations are preserved until `--reevaluate` is passed. An enabled
+failed evaluation makes the orchestrator exit with status 3 when reproduction
+itself otherwise succeeded.
 
 ### Detached evaluation after reproduction
 
 Use `--evaluate-results` to run evaluation later as a separate batch step. This
 mode reads completed `state.json` files and retained `recipe/` directories from
-`--results`; it does not create workspace copies or start any reproduction attempt:
+`--results`; it does not create workspace copies or start a generator attempt.
+The evaluator still runs both recipe tests:
 
 ```bash
 cve-orchestrator \
@@ -874,8 +852,7 @@ cve-orchestrator \
 ```
 
 With no CVE list, every `CVE-*/state.json` under the results directory is
-considered. Only successful reproductions are eligible; failed and
-inconclusive reproductions receive a skipped evaluation. Provide a CVE list to
+considered. Any retained recipe is eligible; evaluation is skipped only when shutdown prevents it. Provide a CVE list to
 scope the detached step:
 
 ```bash
@@ -890,7 +867,7 @@ detached step updates each selected `state.json`, its README handoff, and
 `batch-summary.json` untouched. Its own run metadata is written to
 `evaluation-batch-manifest.json` and `evaluation-batch-summary.json`.
 
-Detached and inline evaluations use the same recipe-only documentation/evidence rubric,
+Detached and inline evaluations use the same fresh-test rubric,
 including when a worktree was retained. Existing evaluations keep their prior
 rubric and verdict until explicitly replaced with `--reevaluate`.
 

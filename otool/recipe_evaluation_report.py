@@ -49,6 +49,20 @@ def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
         lines.append(line)
     if not ids:
         lines.append("- [ ] No valid checklist was returned.")
+    executions = result.get("executions") or {}
+    if isinstance(executions, dict):
+        lines.extend(["", "## Fresh test executions", ""])
+        for variant in ("vulnerable", "fixed"):
+            execution = executions.get(variant) or {}
+            if not isinstance(execution, dict):
+                continue
+            lines.append(
+                f"- {_text(variant.capitalize())}: {_text(execution.get('status', 'unavailable')).upper()}; "
+                f"exit code {_text(execution.get('exit_code'))}; "
+                f"command `{_text(execution.get('command', 'unavailable'), 200)}`"
+            )
+            for item in (execution.get("evidence") or [])[:2]:
+                lines.append(f"  - {_text(item, 300)}")
 
     def section(title: str, values: Any, limit: int = 5) -> None:
         if not isinstance(values, list) or not values:
@@ -68,11 +82,11 @@ def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
         lines.extend(["", "## Review notes", "", _text(result["review"], 1000)])
     section("References checked", result.get("references_checked"))
     section("References unavailable within recipe", result.get("references_unavailable"))
-    section("Reviewer read commands", result.get("commands_run"), limit=3)
+    section("Commands run", result.get("commands_run"), limit=3)
     lines.extend(["", "## Evaluation details", ""])
     for label, value in (
         ("Rubric", record.get("rubric_version")),
-        ("Evidence scope", record.get("scope", "recipe_only")),
+        ("Evidence scope", record.get("scope", "recipe_plus_external_research_and_fresh_tests")),
         ("LLM verdict", result.get("verdict")),
         ("Configured reviewer model", record.get("model")),
         ("Completed (UTC)", record.get("ended_at") or record.get("updated_at")),
