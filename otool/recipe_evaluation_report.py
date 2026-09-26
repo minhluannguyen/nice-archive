@@ -1,4 +1,4 @@
-"""Render an otool human-readable report from a validated evaluation record."""
+"""Render an otool human-readable report from the evaluator's result."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ def _text(value: Any, limit: int = 500) -> str:
 
 def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
     result = record.get("llm_result") or {}
-    inventory = record.get("preflight") or {}
     lines = [
         REPORT_MARKER,
         f"# Evaluation: {_text(record.get('cve', 'unknown CVE'))}", "",
@@ -36,7 +35,7 @@ def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
     ]
     requirements = result.get("requirements")
     checks = {str(r.get("id")): r for r in requirements if isinstance(r, dict)} if isinstance(requirements, list) else {}
-    ids = inventory.get("required_evaluation_checks") or list(checks)
+    ids = list(checks)
     for requirement_id in ids:
         check = checks.get(requirement_id, {})
         status = check.get("status", "unverified")
@@ -72,12 +71,9 @@ def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
         if len(values) > limit:
             lines.append(f"- {len(values) - limit} further item(s) in the JSON record.")
 
-    missing = list(inventory.get("missing") or [])
-    if isinstance(result.get("missing_artifacts"), list):
-        missing.extend(result["missing_artifacts"])
-    section("Missing recipe artifacts", list(dict.fromkeys(str(v) for v in missing)))
+    section("Missing recipe artifacts", result.get("missing_artifacts"))
     section("Concerns", result.get("concerns"))
-    section("Validation findings", record.get("validation_errors"))
+    section("Evaluation handoff errors", record.get("handoff_errors") or record.get("validation_errors"))
     if result.get("review"):
         lines.extend(["", "## Review notes", "", _text(result["review"], 1000)])
     section("References checked", result.get("references_checked"))
@@ -94,7 +90,7 @@ def render_evaluation_report(record: dict[str, Any], recipe: Path) -> str:
     ):
         if value is not None:
             lines.append(f"- {label}: {_text(value)}")
-    for label, key in (("Reviewer JSON", "llm_result"), ("Validated JSON", "result")):
+    for label, key in (("Reviewer JSON", "llm_result"), ("Orchestrator record", "result")):
         path = (record.get("artifacts") or {}).get(key)
         if path:
             target = quote(os.path.relpath(path, recipe), safe="/.")

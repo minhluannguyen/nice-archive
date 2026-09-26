@@ -507,17 +507,17 @@ the container directory and `recipe_dir` as the nested case directory.
 Every new artifact is written to the canonical layout.
 `recipe/<case-name>/EVALUATION.md` is generated after review; it is not a reproduction input.
 
-`summary.csv` is the easiest file to analyze later. A row includes fields such as:
+`summary.csv` is the easiest file to analyze later. It starts with the CVE ID,
+status and LLM verdicts, followed by token and cost metadata. Other run
+metadata follows, and the only OpenStack columns are the server name and ID at
+the end. Its columns include:
 
 ```text
-cve,status,execution_backend,openstack_server_id,openstack_destroyed,
-openstack_artifacts_synced,attempts,wall_time_seconds,opencode_input_tokens,
-opencode_output_tokens,opencode_reasoning_tokens,
-opencode_cache_read_tokens,opencode_total_tokens,opencode_tool_calls,
-opencode_cost,openrouter_reasoning_tokens,openrouter_cost,
-orchestrator_phase,orchestrator_summary,orchestrator_last_error,
-evaluation_status,evaluation_verdict,evaluation_summary,
-worktree_cleanup_policy,worktree_removed,recipe_path,recipe_manifest,worktree_ref,...
+cve,status,first_llm_verdict,second_evaluate_llm_verdict,
+evaluation_status,evaluation_verdict,opencode_input_tokens,
+opencode_output_tokens,...,opencode_cost,cve_cost_usd,...,
+openrouter_cost,...,execution_backend,attempts,...,worktree_ref,
+openstack_server_name,openstack_server_id
 ```
 
 Each CVE directory also contains a README handoff pair:
@@ -831,17 +831,17 @@ ending its OpenCode run. A final response saying it is waiting does not keep the
 non-interactive process alive. Fresh logs are retained under
 `evaluation/test-logs/`.
 
-The prompt is the authoritative seven-check rubric and JSON contract. The
-validator checks requirement evidence, execution records, and verdict
-consistency. Missing or malformed reports and evaluator process failures are
-`inconclusive`; a valid failed check produces `fail`. A timed-out test cannot
-prove fixed behavior. A missing recipe skips evaluation. The inventory is a
+The evaluator applies the seven-check rubric, judges both fresh tests, and
+returns its own `pass` or `fail` verdict. The orchestrator does not rejudge
+the checklist, test evidence, or recipe changes. It only enforces the process
+deadline and cost limits, reads the evaluator's JSON verdict, and archives the
+result. A missing or unreadable verdict, process failure, or timeout is
+`inconclusive`; a missing recipe skips evaluation. The inventory is a
 navigation aid, not a verdict.
 
-After validation, the orchestrator renders `recipe/<case-name>/EVALUATION.md` with the
-reviewer's checklist, fresh test results, concerns, and final status. Inputs
-are fingerprinted before and after review; changed recipe source files
-invalidate the result. Reevaluation replaces the generated report.
+The orchestrator renders `recipe/<case-name>/EVALUATION.md` from the evaluator's
+report, including its checklist, fresh test results, concerns, and verdict.
+Reevaluation replaces the generated report.
 
 Evaluation is independent of the generator's verdict. Both appear as
 `first_llm_verdict` and `second_evaluate_llm_verdict` in each `state.json`,
