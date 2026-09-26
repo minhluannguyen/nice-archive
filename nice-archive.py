@@ -69,7 +69,7 @@ DEFAULT_SCENARIO_COMMAND_TIMEOUT_SECONDS = 300
 MAX_SCENARIO_DURATION_SECONDS = 10 * 60
 SCENARIO_SHUTDOWN_SECONDS = 30
 MANUAL_PHASE_SECONDS = 40 * 60
-AUTOMATED_TEST_PHASE_SECONDS = 30 * 60
+AUTOMATED_TEST_PHASE_SECONDS = 40 * 60
 PHASE_BUDGET_ENV = "NICE_ARCHIVE_PHASE_BUDGET_FILE"
 LOG_LIVE = "live"
 LOG_FILE = "file"
@@ -395,7 +395,7 @@ def run_single_test(
 
     test_remaining = start_phase_budget("test")
     if test_remaining is not None and test_remaining <= 0:
-        error("The 30-minute automated-test phase is exhausted")
+        error("The 40-minute automated-test phase is exhausted")
 
     case_name = case_dir.name
     info(f"Testing: {case_name}")
@@ -1415,7 +1415,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     begin_test_parser = commands.add_parser(
         "begin-test-phase",
-        help="start the 30-minute automated-test phase in an otool attempt",
+        help="start the 40-minute automated-test phase in an otool attempt",
     )
     begin_test_parser.set_defaults(action="begin_test_phase", print_help_when_empty=False)
 
@@ -1635,7 +1635,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
         if remaining is None:
             warning("No otool phase budget is configured for this session")
         elif remaining <= 0:
-            error("The 30-minute automated-test phase is exhausted")
+            error("The 40-minute automated-test phase is exhausted")
         else:
             info(f"Automated-test phase: {int(remaining)} seconds remaining")
         return True

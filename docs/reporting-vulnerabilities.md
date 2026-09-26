@@ -78,7 +78,7 @@ If you are an LLM agent working on a new report, follow this order:
 10. Attempt the identical manual trigger against the fixed scenario. Stop
     manual work at 40 minutes and record any unresolved observation.
 11. Run `nice-archive begin-test-phase` before writing or refining `test.py`
-    after manual validation. In that one 30-minute phase, run both variants
+    after manual validation. In that one 40-minute phase, run both variants
     with finite timeouts, and fix failures while time remains.
     Use a suitable `assertion_blocks` helper and, when applicable, test-runner
     subagents while the main agent monitors progress.
@@ -167,11 +167,11 @@ Enforce these hard wall-clock limits from process launch:
 | Complete NixOS test, including build and execution | 30 minutes |
 | One interactive scenario call, including startup, validation, and cleanup | 10 minutes |
 | Manual validation across scenario calls, from the first launch | 40 minutes |
-| Automated-test phase: write, run both variants, and fix `test.py` | 30 minutes |
+| Automated-test phase: write, run both variants, and fix `test.py` | 40 minutes |
 
 When manual validation reaches 40 minutes, terminate its owned scenarios and
 continue with the automated-test phase. Record incomplete manual evidence
-plainly. Start the 30-minute test-phase budget with
+plainly. Start the 40-minute test-phase budget with
 `nice-archive begin-test-phase` before editing `test.py` after manual validation.
 It includes both complete automated variants and debugging. Do not reset either
 phase budget by restarting a command.
@@ -232,7 +232,7 @@ whether the test is stuck under the two-minute polling and five-minute
 inactivity watchdog. If the watchdog fires, the main agent instructs the
 subagent to interrupt or terminate the test, or terminates the managed session
 itself. Otherwise, the main agent owns the managed test command. Apply the
-remaining time in the 30-minute automated-test phase as the process-level
+remaining time in the 40-minute automated-test phase as the process-level
 deadline from launch.
 
 ### Isolation gate
@@ -1111,7 +1111,15 @@ assert status != 124, f"exploit timed out instead of producing a result: {output
 ```
 
 The same `timeout=` convention applies to `succeed`, `fail`, polling helpers,
-and wait helpers. Also set connect and read timeouts inside network PoCs. Use a
+wait helpers, and `assertion_blocks` helpers that accept a timeout. Choose
+short, operation-specific values so a failed wait does not consume a large
+fraction of the 40-minute phase before the other variant or a fix can run.
+Routine commands and checks should normally take seconds or tens of seconds,
+not several minutes.
+Give services that genuinely need longer to initialize a realistic bounded
+readiness wait; base it on observed startup behavior, and do not repeat the
+same long wait for unrelated prerequisites. Also set connect and read timeouts
+inside network PoCs. Use a
 shell-level timeout only below the test-driver API or when no native timeout
 parameter exists, and document that exception. Bound custom retry loops by
 elapsed time or attempt count. VM and service readiness must fail after five
@@ -1173,16 +1181,28 @@ nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 
 ## 9. Use the CLI for testing and debugging
 
-Use the NICE Archive CLI whenever it supports the operation. Use it for case
-discovery, flake updates for flake-backed cases, scenarios, standalone VMs,
-and vulnerable/fixed tests. Do not replace supported CLI operations with
-guessed flake attributes, direct QEMU commands, or ad hoc containers.
+Use the NICE Archive CLI for case discovery, flake updates for flake-backed
+cases, standalone VMs, and all scenario and vulnerable/fixed test runs. Start
+every interactive scenario with `nice-archive scenario` and every automated
+variant with `nice-archive test`; these commands are mandatory even when the
+corresponding flake output is known. Do not replace them with direct `nix run`
+of the scenario/test output, direct QEMU commands, or ad hoc containers.
 
 Run CLI commands from the repository root. Outside the development shell, use
-`nix run . --` followed by the same NICE Archive arguments. Direct `nix build`,
+`nix run . --` followed by the same NICE Archive arguments; this invokes the
+CLI, not a case's scenario or test output directly. Bound and monitor this Nix
+wrapper invocation under the same scenario or test limits. Direct `nix build`,
 `nix run`, or `nix eval` is allowed only when no CLI operation fits or when
-diagnosing a CLI/generated-output failure. Record the reason and perform final
-vulnerable/fixed validation through `nice-archive test`.
+diagnosing a CLI/generated-output failure. Record the reason. Give every direct
+Nix command both a finite command-tool deadline and a process-level timeout
+within the applicable activity and phase budgets, and inspect its output and
+exit status. For a command that may run
+longer than two minutes, use a managed session and poll at least every two
+minutes; enforce the five-minute inactivity cutoff and terminate its owned
+process group at the deadline. A subagent may monitor that managed command
+only if the main agent receives a detached handle it can poll and terminate;
+the subagent does not replace the timeout or the main agent's watchdog.
+Perform scenario and vulnerable/fixed test validation through the CLI.
 
 List cases:
 
@@ -1200,7 +1220,7 @@ nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false
 For LLM agents, use a test-runner subagent only when it returns a detached,
 cancellable session handle. Otherwise, the main agent must own the managed
 test command. Poll at least every two minutes, apply the five-minute inactivity
-cutoff, and enforce the 30-minute total test limit.
+cutoff, and enforce the 40-minute total test-phase limit.
 
 Save a full log with a custom filename:
 
@@ -1768,12 +1788,15 @@ Before considering the report done:
       timeouts.
 - [ ] Ordinary commands, readiness checks, complete tests, and scenarios obey
       their five-, 30-, and 10-minute limits; manual validation and the full
-      automated-test phase obey their 40- and 30-minute budgets.
+      automated-test phase each obey their 40-minute budgets.
 - [ ] Managed sessions are polled at least every two minutes and terminated
       after five minutes without meaningful output or a bounded response.
 - [ ] Final scenarios, standalone VMs, applicable flake updates, and
-      vulnerable/fixed tests use the NICE Archive CLI whenever it supports the
-      operation.
+      vulnerable/fixed tests use the NICE Archive CLI; no scenario or test
+      output was started with direct `nix run`.
+- [ ] Every necessary direct Nix command had a finite tool deadline and
+      process-level timeout, and its output and status were monitored by the
+      main agent or an eligible subagent.
 - [ ] A subagent owns a long-running process only when the main agent receives
       a detached session handle it can poll and terminate independently.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,

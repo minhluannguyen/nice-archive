@@ -189,7 +189,8 @@ The menu lets you select a CVE case and then:
 
 ### Scenario helper
 
-The scenario helper is the preferred debugging interface for multi-VM tests:
+The scenario helper is the required interface for starting interactive
+scenarios:
 
 ```bash
 nice-archive scenario \
@@ -231,28 +232,19 @@ Git-backed flake evaluation. Review `git status` before committing.
 
 ## Direct Nix usage
 
-The CLI is recommended because it knows the modern output names and legacy
-fallbacks. Direct Nix commands are still useful when debugging a case.
+Always start scenarios with `nice-archive scenario` and automated variants
+with `nice-archive test`. Outside the development shell, invoke the same CLI
+from the repository root with `nix run . -- scenario ...` or
+`nix run . -- test ...`; bound and monitor these wrapper commands too.
 
-Modern library-backed cases expose outputs like:
-
-```bash
-cd cves/<case>
-
-nix run .#test-vulnerable-true-x86_64-linux
-nix run .#test-vulnerable-false-x86_64-linux
-nix run .#start-scenario-vulnerable-true-x86_64-linux
-nix run .#standaloneVMs.<vm-name>
-```
-
-Some older cases still expose legacy names such as:
-
-```bash
-nix run .#testVulnerableTrue
-nix run .#testVulnerableFalse
-```
-
-If an output name fails, inspect the case's `flake.nix` or use the CLI first.
+Use direct Nix commands only for unsupported operations or diagnosis. Give
+each one a finite command deadline and process-level timeout; check its output
+and exit status. For commands that may take over two minutes, use a managed
+session yourself or a subagent whose session you can poll and terminate.
+Enforce the applicable activity and phase limits and the five-minute
+inactivity cutoff. See the
+[reporting guide](./docs/reporting-vulnerabilities.md#bound-waits-and-blocking-triggers)
+for the full watchdog procedure.
 
 ## Documentation
 

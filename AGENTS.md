@@ -98,11 +98,11 @@ limits from launch:
 | Complete NixOS test | 30 minutes |
 | Complete interactive scenario call | 10 minutes |
 | Manual validation phase, from the first scenario launch | 40 minutes |
-| Automated test phase, including writing, running, and fixing `test.py` | 30 minutes |
+| Automated test phase, including writing, running, and fixing `test.py` | 40 minutes |
 
 At the 40-minute manual-phase deadline, stop the scenarios and proceed to the
 automated test phase even if manual vulnerable/fixed behavior remains unresolved.
-Record what was observed and what was not. Start the 30-minute automated-test
+Record what was observed and what was not. Start the 40-minute automated-test
 budget when work on the test oracle begins after manual validation; both
 variants and any fixes must fit within it. A timeout is never passing evidence.
 
@@ -115,7 +115,10 @@ owned test-driver or QEMU children. A timeout or forced kill is a failure or
 blocker, never proof of fixed behavior.
 
 Use native NixOS test-driver `timeout=` arguments for guest commands and waits
-when supported, plus application-level connect/read timeouts. The host-side
+when supported, plus application-level connect/read timeouts. Keep individual
+waits, commands, and assertion-helper timeouts short enough to leave time for
+both variants and test fixes within the 40-minute phase; allow realistic
+startup time for services that need it. The host-side
 process watchdog does not replace guest-side bounds. Detailed monitoring and
 termination rules are in
 [Bound waits and blocking triggers](./docs/reporting-vulnerabilities.md#bound-waits-and-blocking-triggers).
@@ -238,16 +241,26 @@ Then work in this order:
    manual-phase deadline, stop manual work and move on even if either branch is
    unresolved; record the limitation.
 8. Run `nice-archive begin-test-phase` before writing or refining `test.py`
-   after manual validation. Within that one 30-minute phase, run both variants
+   after manual validation. Within that one 40-minute phase, run both variants
    through `nice-archive test`, and fix failures if time permits.
 9. Update only verified README results, clean generated artifacts, review the
     Git index, and run `git status --short` again.
 
-Use the NICE Archive CLI from the repository root whenever it supports the
-operation. Direct Nix commands are for unsupported operations or diagnosis;
-record why they were needed and return to the CLI for final validation. The
-`test` and `scenario` commands stage the selected case for Git-backed flake
-evaluation, so always inspect the index afterward.
+Start every interactive scenario with `nice-archive scenario` and every
+automated vulnerable/fixed run with `nice-archive test` from the repository
+root. These CLI commands are mandatory for scenario and test execution; do not
+invoke their flake outputs through `nix run` directly. Outside the development
+shell, `nix run . -- scenario ...` and `nix run . -- test ...` invoke the same
+CLI; give these wrapper invocations finite tool and process-level deadlines as
+well. Use direct Nix commands only for operations the CLI does not support or
+for diagnosis, and record why they were needed. Every direct Nix command must
+have a finite tool deadline and process-level timeout. Monitor a long-running
+command in a managed session, or assign it to a subagent only when the main
+agent can poll and terminate its detached session; the main agent remains
+responsible for the deadline and inactivity watchdog. Return to the CLI for
+scenario and test validation. The `test` and `scenario` commands stage the
+selected case for Git-backed flake evaluation, so always inspect the index
+afterward.
 
 ### Subagents
 
