@@ -8,11 +8,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only default-branch runs write the shared hestia cache; never cancel them.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   discover-reports:
@@ -49,6 +49,9 @@ jobs:
     if: ${{ needs.discover-reports.outputs.reports != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read # lets hestia detect evicted cache entries upfront
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -61,8 +64,13 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - name: Cache Nix store
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: Cache Nix store (hestia)
+        uses: Mic92/hestia@v3.1.0
+        with:
+          version: v3.1.0
+          # Paths signed by cache.nixos.org are refetched from there instead
+          # of spending the repository's 10 GB cache quota on them.
+          upstream-cache-filter: true
 
       - name: Build and run vulnerable test
         run: |
