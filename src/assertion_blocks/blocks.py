@@ -6,9 +6,21 @@ These functions assume they're running within a NixOS test environment
 where machine objects have methods like succeed(), execute(), wait_for_file(), etc.
 """
 
+import inspect
 import json
 import shlex
 import time
+
+
+def _with_timeout(method, *args, timeout):
+    """Call a driver method, passing timeout only when this driver supports it.
+
+    Older nixpkgs test drivers (e.g. those pinned by historical vulnerable
+    systems) lack the timeout parameter on wait_for_file and wait_for_text.
+    """
+    if "timeout" in inspect.signature(method).parameters:
+        return method(*args, timeout=timeout)
+    return method(*args)
 
 
 def check_service_log_contains(
@@ -44,7 +56,7 @@ def check_root_gid(machine, user, timeout=90):
 def check_screen_text(machine, text, timeout=60):
     """Check if OCR can find text on the machine screen."""
     print("ASSERTION BLOCK: check_screen_text")
-    machine.wait_for_text(text, timeout=timeout)
+    _with_timeout(machine.wait_for_text, text, timeout=timeout)
 
 
 def check_file_exists(machine, file_path, is_existing=True, timeout=90):
@@ -56,7 +68,7 @@ def check_file_exists(machine, file_path, is_existing=True, timeout=90):
 
     quoted_path = shlex.quote(file_path)
     if is_existing:
-        machine.wait_for_file(file_path, timeout=timeout)
+        _with_timeout(machine.wait_for_file, file_path, timeout=timeout)
     else:
         machine.wait_until_succeeds(f"test ! -e {quoted_path}", timeout=timeout)
 
@@ -68,7 +80,7 @@ def check_file_contains(machine, file_path, content, timeout=90, is_existing=Tru
         f"{'present' if is_existing else 'absent'})"
     )
 
-    machine.wait_for_file(file_path, timeout=timeout)
+    _with_timeout(machine.wait_for_file, file_path, timeout=timeout)
     stdout = machine.succeed(f"cat {shlex.quote(file_path)}", timeout=timeout)
     print(stdout)
     contains_content = f"{content}" in stdout
@@ -83,7 +95,7 @@ def check_file_size_equals(machine, file_path, expected_size, timeout=90):
     """Check if a file has the expected size in bytes."""
     print("ASSERTION BLOCK: check_file_size_equals")
 
-    machine.wait_for_file(file_path, timeout=timeout)
+    _with_timeout(machine.wait_for_file, file_path, timeout=timeout)
     stdout = machine.succeed(
         f"stat -c%s {shlex.quote(file_path)}",
         timeout=timeout,
