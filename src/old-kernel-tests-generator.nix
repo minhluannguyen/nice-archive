@@ -118,9 +118,17 @@ let
     testBase.driverInteractive = baseOutputs.${interactiveOutputName};
     isInteractive = true;
   };
+  # Drop the buildable test derivations inherited from baseOutputs: they run
+  # against the modern base kernel, not the old vulnerable one, so building
+  # them would exercise the wrong kernel. Old-kernel cases run via the patched
+  # driver (testDriver) instead, which CI invokes through the .driver output.
+  baseWithoutBuildTests = builtins.removeAttrs baseOutputs [
+    "build-test-vulnerable-true-${system}"
+    "build-test-vulnerable-false-${system}"
+  ];
 in
 
-baseOutputs
+baseWithoutBuildTests
 // {
   ${testOutputName} = testDriver;
 }
