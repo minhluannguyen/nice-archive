@@ -120,9 +120,25 @@ in
       inherit title caseDir VMs testScriptPath enableOCR;
     }) { pkgs = vulnerablePkgs; lib = vulnerablePkgs.lib; }).driver;
 
-    "test-vulnerable-false-${system}" = ((mkTest { 
+    "test-vulnerable-false-${system}" = ((mkTest {
       isInteractive = false;
-      isVulnerable = false; 
+      isVulnerable = false;
       inherit title caseDir VMs testScriptPath enableOCR;
     }) { pkgs = fixedPkgs; lib = fixedPkgs.lib; }).driver;
+
+    # Buildable test derivations: building these runs the VM test as part of
+    # the build, so a passing result is a cacheable store path. CI builds
+    # these (cache hit => no rerun); the `.driver` outputs above stay for
+    # `nix run` (live/interactive) via the CLI.
+    "build-test-vulnerable-true-${system}" = ((mkTest {
+      isInteractive = false;
+      isVulnerable = true;
+      inherit title caseDir VMs testScriptPath enableOCR;
+    }) { pkgs = vulnerablePkgs; lib = vulnerablePkgs.lib; });
+
+    "build-test-vulnerable-false-${system}" = ((mkTest {
+      isInteractive = false;
+      isVulnerable = false;
+      inherit title caseDir VMs testScriptPath enableOCR;
+    }) { pkgs = fixedPkgs; lib = fixedPkgs.lib; });
   }
