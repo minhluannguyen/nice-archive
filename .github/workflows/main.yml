@@ -74,10 +74,16 @@ jobs:
 
       - name: Build and run vulnerable test
         run: |
-          if [ -f "./${{ matrix.report }}/flake.nix" ]; then
-            nix run "./${{ matrix.report }}#test-vulnerable-true-x86_64-linux" \
-              --print-build-logs
-          elif [ -f "./${{ matrix.report }}/default.nix" ]; then
-            nix-build "./${{ matrix.report }}/default.nix" -A testVulnerableTrue
+          ref="./${{ matrix.report }}"
+          if [ -f "$ref/flake.nix" ] && \
+             nix eval "$ref#build-test-vulnerable-true-x86_64-linux.drvPath" >/dev/null 2>&1; then
+            # Cacheable test derivation: building it runs the VM once; a later
+            # cache hit (hestia) substitutes the result without rerunning.
+            nix build "$ref#build-test-vulnerable-true-x86_64-linux" --print-build-logs
+          elif [ -f "$ref/flake.nix" ]; then
+            # Old-kernel cases expose only a runnable driver (not cacheable).
+            nix run "$ref#test-vulnerable-true-x86_64-linux" --print-build-logs
+          elif [ -f "$ref/default.nix" ]; then
+            nix-build "$ref/default.nix" -A testVulnerableTrue
             ./result/bin/nixos-test-driver
           fi
