@@ -54,7 +54,6 @@ jobs:
       actions: read # lets hestia detect evicted cache entries upfront
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         report: ${{ fromJson(needs.discover-reports.outputs.reports) }}
     steps:
