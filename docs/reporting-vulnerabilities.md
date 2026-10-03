@@ -943,7 +943,7 @@ command exited. The full helper list and attack-type mapping is in the
 ```python
 ab.check_file_exists(server, "/tmp/important.txt", timeout=90)
 ab.check_file_contains(attacker, "/tmp/leak.txt", "secret", timeout=90)
-ab.check_root_gid(server, "newuser", timeout=90)
+ab.check_root_privileges(server, "newuser", timeout=90)
 ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
