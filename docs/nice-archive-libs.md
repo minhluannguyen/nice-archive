@@ -519,7 +519,7 @@ Available helpers:
 | Helper | Purpose |
 | --- | --- |
 | `check_service_log_contains(machine, check_message, unit, failed_message="", timeout=60)` | Wait for text in a systemd unit journal. |
-| `check_root_gid(machine, user, timeout=90)` | Check that a user has root UID and GID. |
+| `check_root_privileges(machine, user, timeout=90)` | Check that a user has root UID and GID. |
 | `check_screen_text(machine, text, timeout=60)` | Use OCR to wait for text on the VM screen. Requires `enableOCR = true`. |
 | `check_file_exists(machine, file_path, is_existing=True, timeout=90)` | Check that a path exists or remains absent. |
 | `check_file_contains(machine, file_path, content, timeout=90, is_existing=True)` | Check that an existing file contains or omits text. |
@@ -540,7 +540,7 @@ Use existing cases as models:
 
 | Vulnerability or proof type | Preferred assertion blocks | Model cases |
 | --- | --- | --- |
-| Privilege escalation | `check_root_gid` | Dirty COW, PwnKit, chwoot |
+| Privilege escalation | `check_root_privileges` | Dirty COW, PwnKit, chwoot |
 | DoS / infinite loop / CPU exhaustion | `check_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
 | Memory exhaustion | `check_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
 | File write, overwrite, deletion, or preservation | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
@@ -556,7 +556,7 @@ Use existing cases as models:
 ```python
 import assertion_blocks as ab
 
-ab.check_root_gid(server, "newuser", timeout=90)
+ab.check_root_privileges(server, "newuser", timeout=90)
 ```
 
 ### DoS / CPU exhaustion example

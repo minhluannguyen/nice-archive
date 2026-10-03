@@ -42,9 +42,9 @@ def check_service_log_contains(
     assert f"{check_message}" in stdout, failed_msg_display
 
 
-def check_root_gid(machine, user, timeout=90):
+def check_root_privileges(machine, user, timeout=90):
     """Check if a user has root privileges."""
-    print("ASSERTION BLOCK: check_root_gid")
+    print("ASSERTION BLOCK: check_root_privileges")
     stdout = machine.succeed(f"su - {shlex.quote(user)} -c 'id'", timeout=timeout)
     print(stdout)
     assert (
