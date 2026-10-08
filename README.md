@@ -1,193 +1,146 @@
-# NICE Archive
+<p align="center">
+  <img src=".github/assets/banner.png" alt="NICE Archive banner" width="100%" />
+</p>
 
-NICE Archive is a collection of reproducible NixOS virtual machines and NixOS
-integration tests for CVE reproductions. Each CVE case lives under
-[`cves/`](./cves/) and contains the Nix, VM, exploit, and test files needed to
-rebuild the experiment.
+*Pronounced like the city of Nice, France.*
 
-The project also includes a small CLI, `nice-archive`, and reusable library
-generators under [`src/`](./src/) for creating consistent vulnerable/fixed
-test scenarios.
+**NICE Archive** is a collection of vulnerability reproduction recipes. Each recipe provides virtual machine (VM) configurations and an exploitation scenario for a specific CVE.
 
-## Repository layout
+These recipes are designed to be reproducible, declarative, and machine-checkable. For the design principles and motivation behind NICE Archive, see the [NICE paper](https://arxiv.org/abs/2606.00625).
 
-```text
-.
-├── cves/                  # One directory per CVE reproduction
-├── docs/                  # Project documentation
-├── src/                   # NICE Archive Nix libraries and Python assertions
-├── nice-archive.py        # CLI implementation
-├── nice-archive           # Local wrapper for the CLI
-├── cleanup-script.sh      # Removes generated VM/test artifacts
-├── cve-loc-report.sh      # Helper script for rough CVE size reports
-└── flake.nix              # Development shell and CLI app
-```
-
-Start with [`docs/README.md`](./docs/README.md) for the documentation table of
-contents.
+The project also provides a command-line interface (CLI), `nice-archive`, and a helper library under [`src/`](./src/).
 
 ## Requirements
 
-- [Nix](https://nixos.org/download.html)
-- Nix flakes enabled
-- QEMU available on the host
-- KVM acceleration recommended for practical VM performance
-- Optional: [direnv](https://direnv.net/) with nix-direnv
+NICE Archive is designed to run on Linux systems. It requires:
 
-Enable flakes in `/etc/nix/nix.conf`:
+- [Nix](https://nixos.org/download.html).
+- Nix flakes enabled. Add the following to `/etc/nix/nix.conf`:
 
-```text
-experimental-features = nix-command flakes
-```
+  ```ini
+  experimental-features = nix-command flakes
+  ```
+
+- KVM acceleration (recommended for better VM performance).
+- Optionally, [direnv](https://direnv.net/) with nix-direnv for automatic development shell activation.
 
 ## Development shell
 
-Enter the project shell:
+NICE Archive provides a development environment containing the packages and dependencies needed to build and run its recipes and tools. To enter the development shell, run:
 
 ```bash
 nix develop
 ```
 
-The shell provides the Python dependencies and runtime tools used by the CLI.
-
-With direnv:
+To automatically activate the development shell when entering the repository directory, use `direnv` with the provided `.envrc` file:
 
 ```bash
 cd /path/to/nice-archive
 direnv allow
 ```
 
-After that, entering the repository loads the same environment automatically.
+## Getting started
 
-## CLI quick start
+#### Demo
 
-Run CLI commands from the repository root.
-
-With the development shell active:
-
-```bash
-nice-archive list-cves
-```
-
-Without entering the shell:
-
-```bash
-nix run . -- list-cves
-```
-
-The examples below use `nice-archive`. If you are outside the development
-shell, replace `nice-archive` with `nix run . --`.
-
-### List CVE cases
-
-```bash
-nice-archive list-cves
-```
-
-### Run automated tests
-
-Run one vulnerable test:
-
-```bash
-nice-archive test \
-  --case cve-2025-32463-chwoot \
-  --vulnerable true
-```
-
-Run the fixed/non-vulnerable variant:
-
-```bash
-nice-archive test \
-  --case cve-2025-32463-chwoot \
-  --vulnerable false
-```
-
-Run all vulnerable or fixed tests:
-
-```bash
-nice-archive test --all --vulnerable true
-nice-archive test --all --vulnerable false
-```
-
-By default, CLI test runs save the full log in the case directory and print
-only the last 100 lines.
-
-Logging modes:
-
-```bash
-# Save the full log with the default generated filename.
-nice-archive test --case cve-2025-32463-chwoot --log file
-
-# Save the full log using a custom filename inside the case directory.
-nice-archive test --case cve-2025-32463-chwoot --log file debug.log
-
-# Print the Nix/test output live and do not create a log file.
-nice-archive test --case cve-2025-32463-chwoot --log live
-
-# Suppress test output and do not create a log file.
-nice-archive test --case cve-2025-32463-chwoot --log none
-```
-
-Add `--refresh` to pass `--refresh` to `nix run`.
-
-### List and run standalone VMs
-
-Some cases expose manually runnable VMs through `standaloneVMs`.
-
-```bash
-nice-archive list-vms --case cve-2025-32463-chwoot
-nice-archive vm --case cve-2025-32463-chwoot --name server
-```
-
-Use `--no-prompt` in scripts to fail instead of opening interactive prompts
-when required values are missing.
-
-### Update flake locks
-
-This command applies to flake-backed cases only.
-
-```bash
-nice-archive update-flakes --case cve-2025-32463-chwoot
-nice-archive update-flakes --all
-```
-
-## Interactive helper
-
-The interactive helper can be started with `nice-archive start`.
-
-### Menu helper
+<p align="left">
+  <img
+    src="docs/assets/demos/getting-started.gif"
+    alt="NICE Archive getting started demonstration"
+    width="550"
+  />
+</p>
+The easiest way to get started is through the CLI's interactive mode. Launch the interactive helper with:
 
 ```bash
 nice-archive start
-
-   .      .                                                                                             .      .   
-   _\/  \/_    ███╗   ██╗██╗ ██████╗███████╗     █████╗ ██████╗  ██████╗██╗  ██╗██╗██╗   ██╗███████╗    _\/  \/_   
-    _\/\/_     ████╗  ██║██║██╔════╝██╔════╝    ██╔══██╗██╔══██╗██╔════╝██║  ██║██║██║   ██║██╔════╝     _\/\/_    
-_\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     █████╗      ███████║██████╔╝██║     ███████║██║██║   ██║█████╗   _\_\_\/\/_/_/_
- / /_/\/\_\ \  ██║╚██╗██║██║██║     ██╔══╝      ██╔══██║██╔══██╗██║     ██╔══██║██║╚██╗ ██╔╝██╔══╝    / /_/\/\_\ \ 
-    _/\/\_     ██║ ╚████║██║╚██████╗███████╗    ██║  ██║██║  ██║╚██████╗██║  ██║██║ ╚████╔╝ ███████╗     _/\/\_    
-    /\  /\     ╚═╝  ╚═══╝╚═╝ ╚═════╝╚══════╝    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚══════╝     /\  /\    
-   '      '                                                                                             '      '   
-    
-? What would you like to do? (Use arrow keys)
- → Start interactive scenario
-   Run tests
-   Run standalone VM machines
-   Update flakes for CVE cases
-   Exit
-
 ```
 
-The menu lets you select a CVE case and then:
+The interactive menu provides access to the main CLI features:
 
-- start an interactive scenario;
-- run tests;
-- run standalone VMs; or
-- update flake locks.
+```text
+? What would you like to do? (Use arrow keys)
+  → Start interactive scenario
+    Run tests
+    Run standalone VM machines
+    Update flakes for CVE cases
+    Exit
+```
 
-### Scenario helper
+Most CLI functionality is accessible through this menu. You can:
 
-The scenario helper is the preferred debugging interface for multi-VM tests:
+- Start an interactive scenario to explore a vulnerable environment.
+- Run automated validation tests.
+- Launch standalone VMs.
+- Update flake locks for CVE cases.
+
+If you are outside the development shell, replace `nice-archive` with `nix run . --` when running commands from the repository root.
+
+### Run validation tests
+
+CVE cases include validation tests that simulate the exploitation process step by step. These tests use the [NixOS test framework](https://nixos.org/manual/nixos/stable/index.html#sec-nixos-tests), which provides a Python-based interface for controlling and interacting with VMs.
+
+Typically, each test has two variants: one targeting the vulnerable environment and another targeting the fixed environment. Both variants can be executed using the CLI.
+
+To list all available CVE cases:
+
+```bash
+$ nice-archive list-cves
+cve-2014-0160-heartbleed
+cve-2014-0224-early-ccs
+cve-2016-5195-dirty-cow
+```
+
+Run the vulnerable variant of the Heartbleed test:
+
+```bash
+nice-archive test \
+  --case cve-2014-0160-heartbleed \
+  --vulnerable true
+```
+
+Run the fixed (non-vulnerable) variant:
+
+```bash
+nice-archive test \
+  --case cve-2014-0160-heartbleed \
+  --vulnerable false
+```
+
+Run all vulnerable tests:
+
+```bash
+nice-archive test --all --vulnerable true
+```
+
+By default, the CLI saves the full test log in the corresponding CVE case directory and displays only the last 100 lines in the terminal.
+
+You can customize this behavior. For example:
+
+```bash
+# Save the full log to a custom filename inside the case directory.
+nice-archive test --case cve-2014-0160-heartbleed --log file debug.log
+
+# Stream the test output directly to the terminal without creating a log file.
+nice-archive test --case cve-2014-0160-heartbleed --log live
+```
+
+See the [CLI tools documentation](./docs/cli-tools.md) for more details.
+
+### Scenario mode
+
+#### Demo
+<p align="left">
+  <img
+    src="docs/assets/demos/scenario-mode.gif"
+    alt="NICE Archive interactive scenario demonstration"
+    width="850"
+  />
+</p>
+
+The NICE Archive CLI provides an interactive debugging mode, called *scenario mode*, that launches all VMs involved in a CVE case and allows users to interact with them directly.
+
+To start a scenario:
 
 ```bash
 nice-archive scenario \
@@ -196,131 +149,58 @@ nice-archive scenario \
   --popup true
 ```
 
-This runs the interactive NixOS test driver and starts the VMs. With
-`--popup true`, terminal windows open for interacting with the VMs.
+This launches an interactive CPython session with the scenario loaded and all VMs started. Terminal windows also open for interacting directly with the individual VMs.
 
-The user can also interact with the VMs through the test driver terminal. Some common commands are:
+<!-- TODO: Add a GIF demonstrating scenario mode. -->
+
+By default, VM terminal windows open automatically. You can disable them with `--popup false` and interact with the VMs exclusively through the scenario's Python terminal.
+
+Scenario mode uses the Python interface provided by the [NixOS test framework](https://nixos.org/manual/nixos/stable/index.html#sec-nixos-tests). Some commonly used commands include:
 
 ```python
+# Start all VMs.
 start_all()
+
+# Wait for the server to finish booting.
 server.wait_for_unit("multi-user.target")
+
+# Execute a command on the server and require it to succeed.
 server.succeed("id")
+
+# Inspect logs for a systemd service.
 server.succeed("journalctl -u <unit> --no-pager")
 ```
 
-Exit the scenario with `Ctrl+D` in the scenario terminal and choose to kill the
-VMs.
+To exit the scenario, press `Ctrl+D` in the Python terminal and choose to terminate the VMs. Only one scenario can run at a time.
 
-The CLI takes an exclusive file lock before starting a scenario and releases it
-when the scenario exits. By default the lock is
-`.nice-archive-scenario.lock` in the repository checkout. Override it with
-`NICE_ARCHIVE_SCENARIO_LOCK=/path/to/lock` when multiple processes use
-different working directories, or set `NICE_ARCHIVE_SCENARIO_LOCK=none` to
-disable it. This serializes scenario-mode VM labs across parallel agents. It
-does not affect `nice-archive test`, standalone VMs, or other commands.
+**Note:** The `test` and `scenario` commands automatically execute `git add <case-dir>` before evaluating flake outputs. This ensures that newly created files are visible to Nix's Git-backed flake evaluation. Be aware that this stages files in Git; review `git status` before committing.
 
-Note: the `test` and `scenario` commands run `git add <case-dir>` before
-invoking flake outputs so that newly created files are visible to Nix's
-Git-backed flake evaluation. Review `git status` before committing.
+### Update flake locks
 
-## Direct Nix usage
+Each CVE case uses a flake lock file to pin its dependencies, including Nixpkgs revisions. These locks help preserve reproducibility across executions.
 
-The CLI is recommended because it knows the modern output names and legacy
-fallbacks. Direct Nix commands are still useful when debugging a case.
-
-Modern library-backed cases expose outputs like:
+When necessary, you can update the flake lock files using the CLI:
 
 ```bash
-cd cves/<case>
+# Update a specific CVE case.
+nice-archive update-flakes --case cve-2014-0160-heartbleed
 
-nix run .#test-vulnerable-true-x86_64-linux
-nix run .#test-vulnerable-false-x86_64-linux
-nix run .#start-scenario-vulnerable-true-x86_64-linux
-nix run .#standaloneVMs.<vm-name>
+# Update all CVE cases.
+nice-archive update-flakes --all
 ```
 
-Some older cases still expose legacy names such as:
-
-```bash
-nix run .#testVulnerableTrue
-nix run .#testVulnerableFalse
-```
-
-If an output name fails, inspect the case's `flake.nix` or use the CLI first.
+**Note:** Updating flake locks may change the dependencies or behavior of vulnerable environments. Review and validate affected recipes after updating their locks.
 
 ## Documentation
 
-- [Documentation index](./docs/README.md)
-- [NICE Archive library reference](./docs/nice-archive-libs.md)
-- [Reporting a vulnerability with NICE Archive](./docs/reporting-vulnerabilities.md)
-
-The library reference documents `testsGenerator`, `standaloneVMGenerator`,
-`oldKernelTestsGenerator`, graphical/OCR flags, old-kernel compatibility, and
-Python assertion helpers.
-
-The reporting guide is the recommended workflow for adding or updating a CVE
-case.
+For more detailed information, see the [documentation index](./docs/README.md), which includes getting-started guides, CLI documentation, and technical references for the NICE Archive framework.
 
 ## Agent-based CVE reproduction
 
-This repository includes [`AGENTS.md`](./AGENTS.md) as the concise operating
-contract for coding agents. A request such as `Reproduce CVE-YYYY-NNNN` asks an
-agent to research the vulnerability, build or complete its isolated case, and
-prove vulnerable and fixed behavior with manual observations and automated
-oracles.
+NICE Archive also supports agent-assisted vulnerability reproduction.
 
-The contract defines the safety gates, shell and timeout rules, required
-evidence, validation sequence, and optional subagent roles. Detailed procedures
-and technical examples live in the
-[reporting guide](./docs/reporting-vulnerabilities.md) and
-[library reference](./docs/nice-archive-libs.md).
+The repository provides [`AGENTS.md`](./AGENTS.md), which serves as the entry point and operating contract for LLM-based coding agents.
 
-## Cleaning generated artifacts
+Given a task such as `Reproduce CVE-YYYY-NNNN`, an agent is expected to investigate the vulnerability, construct or complete an isolated reproduction environment, and validate the vulnerable and fixed behavior using exploitation evidence and automated test oracles.
 
-Test and VM runs can create `result` symlinks, `*.qcow2` disk images, and
-`.nixos-test-history` files.
-
-Clean all CVE cases:
-
-```bash
-./cleanup-script.sh cves
-```
-
-Clean one case:
-
-```bash
-./cleanup-script.sh cves/cve-2025-32463-chwoot
-```
-
-## Troubleshooting
-
-### `flake ... does not provide attribute ...`
-
-The case may use modern generated names, legacy names, or standalone nested
-outputs. Prefer the CLI first:
-
-```bash
-nice-archive test --case <case> --vulnerable true
-nice-archive list-vms --case <case>
-```
-
-### New files are missing from Nix evaluation
-
-Nix flakes sourced from Git only include files visible to Git. Add new case
-files to the index or use the CLI commands that stage the selected case before
-running tests and scenarios.
-
-### Port conflicts
-
-Only standalone VMs may forward host ports; scenario and automated-test VMs
-communicate over their VM network. If a standalone port is already in use,
-edit the relevant `vm-*.nix` file and change `virtualisation.forwardPorts`.
-
-### GUI or OCR tests fail
-
-Graphical tests normally need:
-
-- `isGraphics = true` on the graphical VM; and
-- `enableOCR = true` in the generator when using OCR assertions.
-
-See the library reference for details.
+The agent instructions define the required safety checks, execution and timeout rules, validation procedures, evidence requirements, and optional subagent workflows.
