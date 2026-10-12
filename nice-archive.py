@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-A reproducible security report generator for cURL vulnerabilities, built with Nix.
-Interactive tool to create new report cases, run tests, and manage VMs.
-"""
+"""Manage NICE Archive cases, tests, virtual machines, and reports."""
 
 import sys
 import subprocess
@@ -29,8 +26,6 @@ NC = '\033[0m'  # No Color
 # Directories
 USER_DIR = Path.cwd()
 REPORT_DIR = USER_DIR / "cves"
-
-LIBRARY_DIR = Path(__file__).parent
 
 if sys.platform.startswith("linux"):
     systemStr = "x86_64-linux"
@@ -321,11 +316,108 @@ def print_log_tail(log_text: str):
         print(output, end="" if output.endswith("\n") else "\n")
 
 def clean_output(case_dir: Path):
-    """Clean previous test outputs"""
+    """Remove generated artifacts below a case, without following symlinks."""
+    if case_dir.is_symlink() or not case_dir.is_dir():
+        warning(f"Case directory is missing or is a symlink: {case_dir}")
+        return None
+
+    def raise_walk_error(exc: OSError):
+        raise exc
+
+    removed = 0
     try:
-        subprocess.run(["bash", LIBRARY_DIR / "cleanup-script.sh", str(case_dir)], cwd=LIBRARY_DIR, capture_output=True)
-    except Exception as e:
-        warning(f"Error during cleanup: {e}")
+        for directory, subdirs, files in os.walk(
+            case_dir, followlinks=False, onerror=raise_walk_error
+        ):
+            for name in subdirs + files:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    should_remove = name.endswith("result")
+                else:
+                    should_remove = path.is_file() and (
+                        name.endswith((".qcow2", ".log"))
+                        or name == ".nixos-test-history"
+                    )
+                if should_remove:
+                    path.unlink()
+                    removed += 1
+    except OSError as exc:
+        warning(f"Error during cleanup of {case_dir}: {exc}")
+        return None
+    return removed
+
+def cleanup_cases(cases: list[Path]) -> bool:
+    """Run explicit cleanup and show what was removed."""
+    ok = True
+    for case_dir in cases:
+        removed = clean_output(case_dir)
+        if removed is None:
+            ok = False
+        else:
+            success(f"Cleaned {case_dir.name}: removed {removed} generated artifact(s)")
+    return ok
+
+def count_lines(path: Path) -> int:
+    """Count physical lines in a UTF-8 file."""
+    with path.open(encoding="utf-8", errors="replace") as source:
+        return sum(1 for _ in source)
+
+def is_vm_file(path: Path) -> bool:
+    """Recognize root-level Nix VM definitions."""
+    return path.suffix == ".nix" and (
+        path.name == "vm.nix"
+        or path.name.startswith("vm-")
+        or path.name.endswith("-vm.nix")
+    )
+
+def find_cve_directories(root_dir: Path) -> list[Path]:
+    """Find CVE directories under a case, CVE collection, or repository."""
+    if root_dir.name.startswith("cve-"):
+        return [root_dir]
+    direct_children = sorted(
+        (path for path in root_dir.glob("cve-*") if path.is_dir()),
+        key=lambda path: path.name,
+    )
+    if direct_children:
+        return direct_children
+    cves_dir = root_dir / "cves"
+    if cves_dir.is_dir():
+        return sorted(
+            (path for path in cves_dir.glob("cve-*") if path.is_dir()),
+            key=lambda path: path.name,
+        )
+    return []
+
+def count_worktree(directory: Path) -> tuple[int, int, int]:
+    """Return VM count, VM lines, and test lines for one CVE directory."""
+    files = [path for path in directory.iterdir() if path.is_file()]
+    vm_files = [path for path in files if is_vm_file(path)]
+    test_files = [path for path in files if path.name in {"test.nix", "test.py"}]
+    return (
+        len(vm_files),
+        sum(count_lines(path) for path in vm_files),
+        sum(count_lines(path) for path in test_files),
+    )
+
+def print_loc_report(root_dir: Path) -> bool:
+    """Print root-level VM and test line counts for CVE directories."""
+    root_dir = root_dir.expanduser().resolve()
+    if not root_dir.is_dir():
+        warning(f"Report directory not found: {root_dir}")
+        return False
+
+    directories = find_cve_directories(root_dir)
+    print(f"{'CVE':45} | {'VMs':>6} | {'LoC VM':>9} | {'LoC Test':>11}")
+    print("-" * 81)
+    try:
+        for directory in directories:
+            vm_count, vm_loc, test_loc = count_worktree(directory)
+            print(f"{directory.name:45} | {vm_count:6} | {vm_loc:9} | {test_loc:11}")
+    except OSError as exc:
+        warning(f"Could not count lines: {exc}")
+        return False
+    print(f"Total CVEs: {len(directories)}")
+    return True
 
 def git_add_case(case_dir: Path):
     """Add a case directory to git."""
@@ -354,7 +446,8 @@ def run_single_test(
     print()
 
     info("Cleaning previous test outputs...")
-    clean_output(case_dir)
+    if clean_output(case_dir) is None:
+        return False
 
     start_point = get_start_point(case_dir)
     
@@ -565,10 +658,8 @@ def start_scenario_case_unlocked(
     info("Starting scenario for a report case...")
     print()
 
-    try:
-        clean_output(case_dir)
-    except Exception:
-        pass
+    if clean_output(case_dir) is None:
+        return False
 
     info("Extracting VM names from flake...")
     try:
@@ -729,7 +820,8 @@ def run_standalone_vm(case_dir: Path, vm_name: str | None = None, allow_prompt: 
     print()
 
     info("Cleaning previous VM outputs...")
-    clean_output(case_dir)
+    if clean_output(case_dir) is None:
+        return False
 
     vm_data = get_standalone_vm_data(case_dir)
     vm_names = vm_data["names"]
@@ -858,6 +950,29 @@ def update_flakes():
         update_flake_case(selected)
     show_main_menu()
 
+def show_loc_report():
+    """Show a line-count report from the interactive menu."""
+    selected = prompt_case(
+        message="Select CVE case to count:",
+        include_all=True,
+    )
+    if selected is not None:
+        print_loc_report(REPORT_DIR if selected == ALL_CASES else selected)
+        wait_for_enter()
+    show_main_menu()
+
+def clean_cases_from_menu():
+    """Clean generated artifacts from the interactive menu."""
+    selected = prompt_case(
+        message="Select CVE case to clean:",
+        include_all=True,
+    )
+    if selected is not None:
+        cases = list_case_dirs() if selected == ALL_CASES else [selected]
+        cleanup_cases(cases)
+        wait_for_enter()
+    show_main_menu()
+
 def show_main_menu():
     """Display main menu"""
 
@@ -880,6 +995,8 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
             "Run tests",
             "Run standalone VM machines",
             "Update flakes for CVE cases",
+            "Report CVE line counts",
+            "Clean generated case artifacts",
             "Exit"
         ],
         qmark="?",
@@ -894,6 +1011,10 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
         run_standalone_vms()
     elif choice == "Update flakes for CVE cases":
         update_flakes()
+    elif choice == "Report CVE line counts":
+        show_loc_report()
+    elif choice == "Clean generated case artifacts":
+        clean_cases_from_menu()
     elif choice == "Exit":
         print("Goodbye!")
         sys.exit(0)
@@ -1014,6 +1135,38 @@ def build_parser() -> argparse.ArgumentParser:
         description="List valid CVE case directories.",
     )
     list_cves_parser.set_defaults(action="list_cves", print_help_when_empty=False)
+
+    loc_parser = commands.add_parser(
+        "loc-report",
+        aliases=["cve-loc-report"],
+        help="count VM and test lines in CVE cases",
+        description="Report root-level VM and test line counts for CVE cases.",
+    )
+    loc_parser.add_argument(
+        "root_dir",
+        nargs="?",
+        type=Path,
+        help="case, CVE collection, or repository directory (default: current directory)",
+    )
+    add_case_args(
+        loc_parser,
+        include_all=True,
+        all_help="report on all CVE directories in this repository",
+    )
+    loc_parser.set_defaults(action="loc_report", print_help_when_empty=False)
+
+    cleanup_parser = commands.add_parser(
+        "cleanup",
+        help="remove generated case artifacts",
+        description="Remove generated logs, VM disks, test history, and result links.",
+    )
+    add_case_args(
+        cleanup_parser,
+        include_all=True,
+        all_help="clean all case directories in this repository",
+    )
+    add_no_prompt_arg(cleanup_parser)
+    cleanup_parser.set_defaults(action="cleanup", print_help_when_empty=True, command_parser=cleanup_parser)
 
     test_parser = commands.add_parser(
         "test",
@@ -1190,6 +1343,30 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
     if action == "list_cves":
         return list_cases()
 
+    if action == "loc_report":
+        if args.root_dir is not None and (args.case_name or args.all):
+            parser.error("ROOT_DIR cannot be combined with --case or --all")
+        if args.case_name and args.all:
+            parser.error("--case and --all cannot be used together")
+        if args.case_name:
+            root_dir = resolve_case(args.case_name)
+        elif args.all:
+            root_dir = REPORT_DIR
+        else:
+            root_dir = args.root_dir or USER_DIR
+        return print_loc_report(root_dir)
+
+    if action == "cleanup":
+        selected = cli_case(
+            args,
+            parser,
+            message="Select CVE case to clean:",
+            include_all=True,
+            require_nix_entry=False,
+        )
+        cases = list_case_dirs() if selected == ALL_CASES else [selected]
+        return cleanup_cases(cases)
+
     if action == "list_vms":
         case_dir = cli_case(
             args,
@@ -1268,7 +1445,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
 
         return update_flake_case(selected)
 
-    parser.error("choose a command such as start, test, scenario, vm, update-flakes, list-cves, or list-vms")
+    parser.error("choose a command such as start, test, scenario, vm, cleanup, loc-report, update-flakes, list-cves, or list-vms")
 
 def main(argv: list[str] | None = None):
     """Main entry point"""
