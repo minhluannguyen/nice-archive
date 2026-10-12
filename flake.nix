@@ -69,17 +69,14 @@
             exec ${pkgs.python312}/bin/python ${self}/cve-orchestrator.py "$@"
           '';
 
-          cve-loc-report = pkgs.writeShellScriptBin "cve-loc-report" ''
-            exec ${pkgs.python312}/bin/python ${self}/cve-loc-report.py "$@"
-          '';
         in
         f {
-          inherit pkgs opencodePkgs pythonEnv runtimePackages nixVersions nice-archive cve-orchestrator cve-loc-report;
+          inherit pkgs opencodePkgs pythonEnv runtimePackages nixVersions nice-archive cve-orchestrator;
         });
     in
     {
-      packages = forEachSystem ({ nice-archive, cve-orchestrator, cve-loc-report, ... }: {
-        inherit nice-archive cve-orchestrator cve-loc-report;
+      packages = forEachSystem ({ nice-archive, cve-orchestrator, ... }: {
+        inherit nice-archive cve-orchestrator;
         default = nice-archive;
       });
 
@@ -92,20 +89,15 @@
           type = "app";
           program = "${self.packages.${system}.cve-orchestrator}/bin/cve-orchestrator";
         };
-        cve-loc-report = {
-          type = "app";
-          program = "${self.packages.${system}.cve-loc-report}/bin/cve-loc-report";
-        };
         default = self.apps.${system}.nice-archive;
       });
 
-      devShells = forEachSystem ({ pkgs, opencodePkgs, pythonEnv, runtimePackages, nixVersions, cve-orchestrator, cve-loc-report, ... }: {
+      devShells = forEachSystem ({ pkgs, opencodePkgs, pythonEnv, runtimePackages, nixVersions, cve-orchestrator, ... }: {
         default = pkgs.mkShell {
           packages = [
             pythonEnv
             nixVersions
             cve-orchestrator
-            cve-loc-report
           ] ++ runtimePackages ++ [
             pkgs.git
             opencodePkgs.opencode

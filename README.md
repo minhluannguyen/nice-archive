@@ -64,6 +64,8 @@ The interactive menu provides access to the main CLI features:
     Run tests
     Run standalone VM machines
     Update flakes for CVE cases
+    Report CVE line counts
+    Clean generated case artifacts
     Exit
 ```
 
@@ -73,6 +75,8 @@ Most CLI functionality is accessible through this menu. You can:
 - Run automated validation tests.
 - Launch standalone VMs.
 - Update flake locks for CVE cases.
+- Count lines in case VM definitions and tests.
+- Remove generated logs and VM artifacts from cases.
 
 If you are outside the development shell, replace `nice-archive` with `nix run . --` when running commands from the repository root.
 
@@ -125,7 +129,7 @@ nice-archive test --case cve-2014-0160-heartbleed --log file debug.log
 nice-archive test --case cve-2014-0160-heartbleed --log live
 ```
 
-See the [CLI tools documentation](./docs/cli-tools.md) for more details.
+See the [CLI tool documentation](./docs/cli-tool.md) for more details.
 
 ### Scenario mode
 
