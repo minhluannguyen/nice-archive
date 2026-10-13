@@ -36,7 +36,7 @@ It exports:
 | `testsGenerator` | Generates vulnerable/fixed NixOS test outputs and optional interactive scenarios. |
 | `standaloneVMGenerator` | Generates named standalone QEMU VM outputs under `standaloneVMs`. |
 | `oldKernelTestsGenerator` | Generates normal test outputs, then replaces selected machines with old-kernel VM builds. |
-| `oldKernelNixosTest` | Low-level compatibility helper used by `oldKernelTestsGenerator`. |
+| `oldKernelNixosTest` | Low-level compatibility helper used by `oldKernelTestsGenerator`. Can be used directly without the `nice-archive-lib`. |
 
 ## Generated test outputs
 
@@ -76,9 +76,7 @@ returning a NixOS module:
 { pkgs, lib, ... }:
 
 {
-  environment.systemPackages = [
-    pkgs.curl
-  ];
+
 }
 ```
 
@@ -148,7 +146,7 @@ nice-archive-lib.testsGenerator {
 | `caseDir` | Yes | — | CVE directory, usually `./.`. |
 | `testScriptPath` | Yes | — | Python NixOS test script. |
 | `VMs` | No | `{}` | Attribute set of VM definitions. |
-| `system` | No | `"x86_64-linux"` | Nix system for generated outputs. |
+| `system` | No | `"x86_64-linux"` | Nix system for generated outputs. Supported values are `"x86_64-linux"` and `"aarch64-linux"`. |
 | `generateInteractiveTests` | No | `true` | Generate `start-scenario-*` outputs. |
 | `enableOCR` | No | `false` | Enable OCR support in the NixOS test driver. Required for `wait_for_text` and `check_screen_text`. |
 
@@ -164,10 +162,12 @@ nice-archive-lib.testsGenerator {
 | `isGraphics` | No | `false` | Value for `virtualisation.graphics`. |
 | `isOldKernelVM` | No | `false` | Imports the old-kernel backdoor service when true. Usually set by `oldKernelTestsGenerator`. |
 
-### Variants
+#### Variants
+
+There are three supported VM variants:
 
 `variant = "invariant"` means the VM is identical in vulnerable and fixed
-tests. The VM receives `isVulnerable = null`.
+tests, usually for helper VMs (do not contain the affected package). The VM receives `isVulnerable = null`.
 
 ```nix
 attacker = {
@@ -177,7 +177,7 @@ attacker = {
 ```
 
 `variant = "package"` means the NixOS system stays on the same nixpkgs input,
-but the VM configuration switches packages based on `isVulnerable`.
+but the VM configuration switches packages based on `isVulnerable`. Imagine you want to install an old vulnerable version of a package in your current "modern"  system. This is sufficient for most software, which does not depend too heavily on the kernel or other system-level components.
 
 ```nix
 client = {
@@ -187,7 +187,7 @@ client = {
 ```
 
 `variant = "system"` means the full NixOS system is evaluated from different
-nixpkgs pins.
+nixpkgs pins. For software that is tightly coupled to the OS and would break if the old version of the package is installed on a modern system. This option will take a snapshot of the nixpkgs repository at the time of the vulnerability and use that to build the whole NixOS VM. It's like traveling back in time.
 
 ```nix
 server = {
@@ -211,7 +211,40 @@ If `variant` is omitted, the generator infers:
 
 Prefer explicit variants in new cases.
 
-### Example with `extraArgs`
+#### Historical package pin inside a VM
+
+For a `package` variant, select a verified historical nixpkgs revision inside
+the affected VM module while leaving the surrounding NixOS system on its
+normal pin. Replace the placeholder commits, hashes, and package attribute
+with values independently verified for the CVE:
+
+```nix
+{ isVulnerable, ... }:
+{ pkgs, ... }:
+let
+  pin = if isVulnerable then {
+    rev = "<vulnerable-nixpkgs-commit>";
+    hash = "<verified-archive-hash>";
+  } else {
+    rev = "<fixed-nixpkgs-commit>";
+    hash = "<verified-archive-hash>";
+  };
+  historical = import (builtins.fetchTarball {
+    url = "https://github.com/NixOS/nixpkgs/archive/${pin.rev}.tar.gz";
+    sha256 = pin.hash;
+  }) { system = pkgs.stdenv.hostPlatform.system; };
+in {
+  environment.systemPackages = [ historical.openssl ];
+}
+```
+
+For this example, `openssl` stands for the affected package attribute. Verify
+the archive hash with `nix-prefetch-url <url> --unpack` and confirm the
+evaluated package version before running the case. See the
+[source-selection workflow](./reporting/02-research-and-sources.md) for the
+decision order.
+
+#### Example with `extraArgs`
 
 ```nix
 VMs = {
@@ -239,7 +272,7 @@ The VM can consume those values:
 }
 ```
 
-### Example with OCR and graphics
+#### Example with OCR and graphics
 
 ```nix
 nice-archive-lib.testsGenerator {
@@ -270,8 +303,7 @@ ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 
 ## `standaloneVMGenerator`
 
-Use `standaloneVMGenerator` when a case should expose manually runnable VMs in
-addition to automated tests.
+This is an alternative for the scenario mode. If the target CVE requires a `system` variant, but the nixpkgs version is too old to support the NixOS test framework, then `standaloneVMGenerator` can be used to generate VMs that can be run manually in QEMU.
 
 ### Syntax
 
@@ -336,6 +368,7 @@ outputs = { nixpkgs, nice-archive-lib, ... }:
     title = "cve-yyyy-nnnn";
     caseDir = ./.;
     testScriptPath = ./test.py;
+    generateInteractiveTests = true;
 
     VMs.server = {
       configPath = ./vm-server.nix;
@@ -372,6 +405,8 @@ It first creates normal base outputs, then replaces one selected scenario with
 drivers patched by `oldKernelNixosTest`.
 
 ### Syntax
+
+Here, a NixOS version 22.05 is used to build the `server` machine.
 
 ```nix
 nice-archive-lib.oldKernelTestsGenerator {
@@ -423,7 +458,7 @@ the fixed scenario should use the old-kernel machines.
 | `generateInteractiveTests` | No | `true` | Generate and patch `start-scenario-*` outputs. |
 | `enableOCR` | No | `false` | Enable OCR in the generated test driver. |
 
-### Old-kernel VM fields
+#### Old-kernel VM fields
 
 These fields are read in addition to the normal `testsGenerator` VM fields:
 
@@ -433,39 +468,7 @@ These fields are read in addition to the normal `testsGenerator` VM fields:
 | `oldKernelGraphics` | `isInteractive` | Graphics value for the old-kernel VM build. |
 | `oldKernelRestrictNetwork` | `null` | Network restriction value for the old-kernel VM build. |
 
-### LibreOffice-style graphical example
-
-```nix
-nice-archive-lib.oldKernelTestsGenerator {
-  title = "CVE-2022-32278 (LibreOffice/XFCE graphical RCE)";
-  caseDir = ./.;
-
-  inherit nixpkgs;
-  oldKernelNixpkgs = nixpkgs-22_05;
-  oldKernelVMNames = [ "libreoffice" ];
-  enableOCR = true;
-
-  VMs = {
-    libreoffice = {
-      configPath = ./libreoffice-vm-graphical.nix;
-      variant = "package";
-      isGraphics = true;
-      oldKernelGraphics = true;
-      extraArgs = {
-        isNFS = true;
-      };
-    };
-
-    nfsserver = {
-      configPath = ./libreoffice-vm-nfs-server.nix;
-      variant = "invariant";
-      isGraphics = false;
-    };
-  };
-
-  testScriptPath = ./test.py;
-}
-```
+See [CVE-2022-32278](../cves/cve-2022-32278-graphical-libreoffice-rce/flake.nix) for a complete example of an old-kernel test case.
 
 ## `oldKernelNixosTest`
 
@@ -499,16 +502,38 @@ in
 The keys in `oldKernelVMs` must match the machine names in the base test
 driver.
 
-## Python assertion blocks
+## NixOS test-driver methods
 
-`testsGenerator` and `oldKernelTestsGenerator` add the `assertion_blocks`
-Python package to the NixOS test environment.
+The generated test exposes each VM by its configured name. Common methods are
+listed below; the [official NixOS test-driver reference](https://nixos.org/manual/nixos/stable/#ssec-machine-objects)
+defines their exact behavior and supported timeout parameters.
+
+| Method | Use |
+| --- | --- |
+| `start_all()` | Boot all machines. |
+| `<vm>.start()` | Boot one machine. |
+| `<vm>.wait_for_unit("name.service", timeout=seconds)` | Wait for a systemd unit. |
+| `<vm>.wait_for_open_port(port, timeout=seconds)` | Wait for a listening TCP port. |
+| `<vm>.succeed("command", timeout=seconds)` | Run a command that must succeed. |
+| `<vm>.fail("command", timeout=seconds)` | Run a command that must fail. |
+| `<vm>.execute("command", timeout=seconds)` | Inspect `(status, output)` without requiring a particular exit status. |
+| `<vm>.wait_until_succeeds("command", timeout=seconds)` | Retry a command until success or timeout. |
+| `<vm>.wait_for_file("/path", timeout=seconds)` | Wait for a guest file. |
+| `<vm>.wait_for_x()` | Wait for X11 in a graphical test. |
+| `<vm>.wait_for_text("text")` | OCR screen text when `enableOCR = true`. |
+| `<vm>.copy_from_host("src", "dst")` | Copy a host file into the VM. |
+| `<vm>.copy_from_vm("src", "dst")` | Copy a VM file back to the host. |
+
+Use native `timeout=` arguments when supported, as well as application-level
+connect and read timeouts for network triggers.
+
+## Python assertion blocks
 
 ```python
 import assertion_blocks as ab
 ```
 
-Assertion blocks should be used as the final oracle of a test whenever a helper
+Assertion blocks should be used as the final validation of a test whenever a helper
 matches the vulnerability class. It is fine to use raw `assert` for control
 flow or branch checks, but the final proof should usually be an
 `assertion_blocks` helper so logs clearly show what security property was
@@ -543,7 +568,7 @@ Use existing cases as models:
 | Privilege escalation | `check_root_privileges` | Dirty COW, PwnKit, chwoot |
 | DoS / infinite loop / CPU exhaustion | `check_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
 | Memory exhaustion | `check_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
-| File write, overwrite, deletion, or preservation | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
+| File write, overwrite, deletion, preservation, RCE evidence | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
 | Information disclosure | `check_file_contains`, optionally `check_file_size_equals` | Heartbleed, GitLab secret snippet |
 | Service crash or fatal signal | `check_core_dump_exists`, `check_service_log_contains` | sysstat double free, TensorFlow FPE, curl SASL crash |
 | Log or request exfiltration | `check_service_log_contains`, `check_file_contains` | Early CCS MITM |
