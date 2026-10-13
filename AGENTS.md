@@ -40,7 +40,7 @@ the API reference in
   unrelated cases or projects.
 
 The full boundary procedure is documented under
-[Isolation gate](./docs/reporting-vulnerabilities.md#isolation-gate).
+[Isolation gate](./docs/tmp-agent.md#isolation-gate).
 
 ### Framework suitability
 
@@ -54,7 +54,7 @@ If the target is out of scope, do not create or modify a case and do not run a
 PoC. Return the CVE, affected target/platform, reason, evidence, and references.
 
 Use the detailed
-[Framework suitability gate](./docs/reporting-vulnerabilities.md#framework-suitability-gate)
+[Framework suitability gate](./docs/tmp-agent.md#framework-suitability-gate)
 to resolve uncertain and cross-platform cases.
 
 ### Shell and environment record
@@ -80,7 +80,7 @@ Record an end timestamp after validation. Never guess model identity, tokens,
 cost, or elapsed time, search hidden state for telemetry, or treat unavailable
 telemetry as a blocker. Use `not available (not exposed by harness)`.
 
-See [Shell execution gate](./docs/reporting-vulnerabilities.md#shell-execution-gate)
+See [Shell execution gate](./docs/tmp-agent.md#shell-execution-gate)
 for command examples and the complete environment-record procedure.
 
 ### Time and progress bounds
@@ -107,7 +107,8 @@ Use native NixOS test-driver `timeout=` arguments for guest commands and waits
 when supported, plus application-level connect/read timeouts. The host-side
 process watchdog does not replace guest-side bounds. Detailed monitoring and
 termination rules are in
-[Bound waits and blocking triggers](./docs/reporting-vulnerabilities.md#bound-waits-and-blocking-triggers).
+[Bound waits and blocking triggers](./docs/reporting/07-test.md) and the
+[agent process watchdog](./docs/tmp-agent.md#shell-execution-gate).
 
 ## 2. Required outcomes
 
@@ -129,7 +130,7 @@ termination rules are in
   exploit code are allowed. Fetch target patches immutably with verified
   hashes.
 
-See [Package source strategy](./docs/reporting-vulnerabilities.md#package-source-strategy)
+See [Package source strategy](./docs/reporting/02-research-and-sources.md)
 for search commands, pinning patterns, and generator selection.
 
 ### Case and topology
@@ -171,7 +172,7 @@ for search commands, pinning patterns, and generator selection.
 
 The case README must be compact, self-contained, source-backed, and follow the
 required section order in
-[Write the case README](./docs/reporting-vulnerabilities.md#13-write-the-case-readme).
+[Write the case README](./docs/reporting/09-case-readme.md).
 It must record affected/fixed versions, prerequisites, topology and roles,
 pins and the exact software acquisition source (nixpkgs, upstream repository,
 release archive, or registry), trigger provenance and modifications, target
@@ -203,13 +204,12 @@ Then work in this order:
 2. Research affected/fixed behavior, PoC provenance, Linux applicability, and
    verified package pins.
 3. Design the minimum topology, target-unique marker, and two-variant oracle.
-4. Implement the flake, VM modules, role-organized trigger, `test.py`, and
-   initial README.
+4. Implement the flake, VM modules, role-organized trigger, and initial README.
 5. Evaluate outputs and independently confirm package versions.
 6. Start the vulnerable scenario through the NICE Archive CLI and manually
    observe the trigger inside the isolated lab.
 7. Repeat the identical manual trigger against the fixed scenario.
-8. Encode or refine the observed flow in `test.py`.
+8. Encode the observed flow in `test.py`.
 9. Run both complete automated variants through `nice-archive test`.
 10. Update only verified README results, clean generated artifacts, review the
     Git index, and run `git status --short` again.
@@ -237,7 +237,7 @@ The main agent monitors progress, compares vulnerable/fixed evidence, and
 terminates scenarios explicitly. Scenario-lock acquisition is expected output;
 it does not serialize automated tests.
 
-See [Subagent orchestration](./docs/reporting-vulnerabilities.md#subagent-orchestration)
+See [Subagent orchestration](./docs/tmp-agent.md#subagent-orchestration)
 for the detailed roles and capability gate.
 
 If blocked, leave the most useful coherent partial implementation. Record the
