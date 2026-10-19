@@ -208,3 +208,16 @@ The repository provides [`AGENTS.md`](./AGENTS.md), which serves as the entry po
 Given a task such as `Reproduce CVE-YYYY-NNNN`, an agent is expected to investigate the vulnerability, construct or complete an isolated reproduction environment, and validate the vulnerable and fixed behavior using exploitation evidence and automated test oracles.
 
 The agent instructions define the required safety checks, execution and timeout rules, validation procedures, evidence requirements, and optional subagent workflows.
+
+## Contributing
+
+Contributions are welcome! Whether you want to add a new CVE recipe, improve an existing one, fix bugs, or enhance the documentation, please read our [Contribution Guidelines](./CONTRIBUTING.md) before submitting a pull request.
+
+## License
+
+NICE Archive's original code and documentation are licensed under
+the [MIT License](./LICENSE).
+
+Third-party exploits and PoCs retain their respective copyrights
+and licensing terms and are not covered by NICE Archive's MIT
+license grant. See [LICENSING.md](./LICENSING.md) for details.
