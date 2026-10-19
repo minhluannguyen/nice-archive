@@ -8,6 +8,9 @@ Archive as a reproducible vulnerability-reporting framework.
 - [Reporting a vulnerability with NICE Archive](./reporting-vulnerabilities.md):
   how to report a CVE with NICE Archive.
 
+- [Reviewing new CVE recipes](./REVIEWING.md): checklist and labels for pull
+  requests that add a recipe.
+
 - [NICE Archive CLI guide](./cli-tool.md): instructions and how to use the `nice-archive` command-line tool.
 
 - [NICE Archive library documentation](./nice-archive-libs.md): the detailed documentation for the `nice-archive-lib`, including the helper functions, and assertions for writing vulnerability recipes.
