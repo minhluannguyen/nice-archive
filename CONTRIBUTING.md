@@ -14,6 +14,8 @@ Because NICE Archive deals with security vulnerabilities, new recipes must meet 
 - **Working reproduction.** Recipes must include functional validation tests and a way to debug the environment, either through scenario mode or standalone VMs.
 
 To create a recipe, follow the [documentation](./docs/README.md) and refer to existing CVE cases for examples.
+Maintainers use the [new recipe review guide](./docs/REVIEWING.md) for pull
+requests that add a CVE recipe.
 
 If you have an unpublished vulnerability, please contact upstream maintainers of the affected software to report the issue. If you are a software maintainer and wish to contribute a recipe for your own software, please contact the NICE Archive maintainers to discuss the best way to do so.
 
@@ -45,6 +47,7 @@ AI-assisted contributions are welcome. However, contributors remain responsible 
 3. Follow the [documentation](./docs/README.md) to create a new NICE recipe.
 4. Open a pull request describing your contribution, its sources, and validation results.
 
-All contributions are subject to maintainer review. We may request additional evidence or changes before merging.
+All contributions are subject to maintainer review. We may request additional
+evidence or changes before merging.
 
 Thank you for helping make vulnerability research more reproducible and accessible!
