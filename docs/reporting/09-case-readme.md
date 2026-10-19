@@ -107,6 +107,6 @@ State verified limits and the VM or container isolation boundary. Use
 ````
 
 For LLM reproduction metadata, follow the
-[temporary agent instructions](../tmp-agent.md#llm-reproduction-metadata).
+[case reporting skill](../agents/skills/case-reporting/SKILL.md#report-verified-evidence).
 
 **Previous:** [Step 8: Verify test correctness](./08-verify-test.md) · **Next:** [Workflow overview](../reporting-vulnerabilities.md)
