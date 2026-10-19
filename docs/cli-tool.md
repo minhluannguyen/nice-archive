@@ -209,5 +209,5 @@ review the staged diff afterward.
 
 Tests, scenarios, and VMs run case-defined software. Keep vulnerable targets
 and triggers inside the intended VM lab; follow the
-[isolation guidance](./tmp-agent.md#isolation-gate). For case
+[isolation guidance](./agents/skills/agent-runtime/SKILL.md#isolation-gate). For case
 outputs and VM design, see the [library reference](./nice-archive-libs.md).

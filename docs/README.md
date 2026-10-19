@@ -18,8 +18,11 @@ Archive as a reproducible vulnerability-reporting framework.
 - [Standalone VMs for manual reproduction](./standalone-vms.md): optional
   manually launched VMs when the interactive scenario does not fit.
 
-- [Temporary agent instructions](./tmp-agent.md): agent and LLM procedures
-  moved out of the reporting workflow pending a later revision.
+- [Agent guides](./agents/reproducer.md): start at
+  [AGENTS.md](../AGENTS.md), then choose the
+  [reproducer](./agents/reproducer.md) or
+  [evaluator](./agents/evaluator.md) role. Focused `SKILL.md` files under
+  [agent skills](./agents/skills/) contain the shared gates and role workflows.
 
 - [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md)
   Use this when running unattended multi-CVE OpenCode experiments and collecting
