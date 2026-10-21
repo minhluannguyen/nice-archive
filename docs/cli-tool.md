@@ -52,6 +52,7 @@ Use `nice-archive <command> --help` to see a command's options. Running
 | `cleanup` | Remove generated files from one case or all cases. |
 | `test` | Check the vulnerable or fixed behavior of one case or all cases. |
 | `scenario` | Explore a case's virtual machines interactively. |
+| `begin-test-phase` | Start the optional shared automated-test clock (for LLM orchestrations). |
 | `list-vms` | See which virtual machines a case lets you launch individually. |
 | `vm` | Launch one of those virtual machines. |
 | `update-flakes` (`update`) | Update the saved dependency versions for one case or all cases. |
@@ -100,8 +101,9 @@ nice-archive cleanup --case cve-2014-0160-heartbleed
 nice-archive cleanup --all --no-prompt
 ```
 
-`cleanup` removes `*.log`, `*.qcow2`, `.nixos-test-history`, and `*result`
-symlinks below the selected case directories and reports how many it removed.
+`cleanup` removes ordinary `*.log` files, `*.qcow2`, `.nixos-test-history`,
+and `*result` symlinks below the selected case directories and reports how
+many it removed. It preserves `scenario-*.log` transcripts.
 Use `--case NAME` for one case or `--all` for every case. Without either, it
 opens a case picker; `--no-prompt` instead requires an explicit selection.
 The interactive menu offers the same one-case or all-case choices. Save any
@@ -148,6 +150,20 @@ printed. Other choices are:
 The `start` menu uses `live` for one case and `none` for all cases. A custom
 filename is only valid with `--log file`.
 
+## Optional shared phase clocks
+
+Set `NICE_ARCHIVE_PHASE_BUDGET_FILE` to a fresh file path for one reproduction
+attempt and keep it unchanged across CLI invocations. The first scenario starts
+a 40-minute manual-validation clock. Run `nice-archive begin-test-phase` before
+writing or refining `test.py`; it starts a separate 40-minute clock for test
+writing, both variants, and fixes. The first `test` starts that clock if the
+marker was missed. Once the test phase starts, further scenarios are rejected.
+
+The CLI rejects new calls after either budget expires. It does not stop an
+already running test at the phase deadline: bound the whole test process by
+the shorter of 30 minutes and the remaining phase time. Without the variable,
+shared phase clocks are disabled; each scenario still has its 10-minute limit.
+
 ## Open a scenario
 
 ```bash
@@ -158,7 +174,9 @@ nice-archive scenario --case cve-2020-7247-opensmtpd --vulnerable true --popup f
 interactive Python test driver. It prints SSH commands for the guests so you
 can use another terminal to inspect them. Within the driver, VM objects are
 named by the case; for a `server` VM, `server.succeed("id")` runs a command in
-that guest. Exit with `Ctrl+D` and choose to kill the VMs.
+that guest. In the default live mode, exit with `Ctrl+D` and choose to kill
+the VMs. The CLI bounds each scenario call to 10 minutes from launch,
+including startup and shutdown.
 
 | `scenario` option | Effect |
 | --- | --- |
@@ -166,10 +184,27 @@ that guest. Exit with `Ctrl+D` and choose to kill the VMs.
 | `--vulnerable true\|false` | Start the vulnerable environment (default) or the fixed one. |
 | `--system SYSTEM` | Choose the operating system and processor architecture to run. |
 | `--popup true\|false` | Open a separate terminal window for each VM (default `true`), or leave them closed. |
+| `--terminal terminator\|xterm` | Select the SSH popup terminal; `terminator` falls back to `xterm` if startup fails. |
+| `--log live\|file [FILE]\|none` | Keep the direct driver prompt, or use a bounded command proxy with or without a transcript. |
+| `--status-file FILE` | Write scenario lifecycle, SSH routes, verification results, and log path as JSON. |
+| `--command-timeout SECONDS` | Bound one command submitted through the quiet proxy. |
 | `--no-prompt` | Show an error if no case was given instead of opening a selection menu. |
 
-Popup windows use `terminator`; with `--popup false`, use the printed SSH
-commands or the interactive driver to reach each VM.
+For a logged quiet session, use distinct files for each variant:
+
+```bash
+nice-archive scenario --case <case> --vulnerable true --popup false \
+  --log file scenario-vulnerable.log \
+  --status-file scenario-vulnerable.status.json
+```
+
+Wait for `scenario> `, then read the status JSON and check `ssh_verified` for
+each SSH command you use. Send one-line test-driver Python; wrap multiple
+statements in one `exec("line 1\\nline 2")`. Each bounded response ends with
+`</scenario-command-output>`; the full transcript stays in the log. Enter
+`:quit` and wait for the process to exit before starting the next variant.
+`--log none` uses the same proxy without a transcript. `--popup false`
+disables SSH terminal windows; case graphics settings control QEMU windows.
 
 The CLI serializes scenarios with `./.nice-archive-scenario.lock`. Set
 `NICE_ARCHIVE_SCENARIO_LOCK` to another path to change the lock, or to `0` to
@@ -202,8 +237,9 @@ both test variants afterward.
 ## Side effects and safety
 
 Before each `test`, `scenario`, or `vm` run, the CLI removes generated case
-artifacts: `*.log`, `*.qcow2`, `.nixos-test-history`, and `*result` symlinks.
-Save any logs you need before starting another run. Flake-backed `test` and
+artifacts. Scenario startup keeps all logs; other cleanup preserves
+`scenario-*.log` but removes ordinary logs. Save any other logs you need before
+starting another run. Flake-backed `test` and
 `scenario` also run `git add` on the selected case so Nix can see new files;
 review the staged diff afterward.
 

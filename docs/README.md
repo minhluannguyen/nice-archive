@@ -8,6 +8,9 @@ Archive as a reproducible vulnerability-reporting framework.
 - [Reporting a vulnerability with NICE Archive](./reporting-vulnerabilities.md):
   how to report a CVE with NICE Archive.
 
+- [Building upstream and third-party packages](./reporting/upstream-and-third-party-builds.md):
+  Nix packaging examples for targets absent from nixpkgs and case-owned triggers.
+
 - [Reviewing new CVE recipes](./REVIEWING.md): checklist and labels for pull
   requests that add a recipe.
 

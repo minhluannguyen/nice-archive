@@ -12,13 +12,20 @@ that the main agent can poll and terminate. A synchronous or hidden process
 stays with the main agent; bounded research, log analysis, or guest commands
 may still be delegated when authorized.
 
-When the gate passes, use a scenario subagent for
-`nice-archive scenario --case <case> --vulnerable <true|false> --popup false`.
-It reports the handle, readiness, and printed guest SSH commands. Use VM
+When the gate passes, use a scenario subagent for:
+
+```bash
+nice-archive scenario --case <case> --vulnerable <true|false> \
+  --popup false --log file <variant-log> \
+  --status-file <variant-status.json>
+```
+
+It reports the handle, readiness, and verified guest SSH commands. Use VM
 operator subagents for bounded health checks, triggers, and target evidence
 inside the lab. The main agent monitors progress and tells the scenario
-subagent when to stop the VMs. Repeat for the fixed variant under the same
-trigger. Scenario-lock acquisition is expected; it does not serialize tests.
+subagent when to enter `:quit` and wait for VM shutdown. Repeat for the fixed
+variant under the same trigger. Scenario-lock acquisition is expected; it does
+not serialize tests.
 
 Use test-runner subagents for the two `nice-archive test` variants only under
 the same handle gate. The main agent polls each run and decides when the

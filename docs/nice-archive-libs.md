@@ -303,7 +303,10 @@ ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 
 ## `standaloneVMGenerator`
 
-This is an alternative for the scenario mode. If the target CVE requires a `system` variant, but the nixpkgs version is too old to support the NixOS test framework, then `standaloneVMGenerator` can be used to generate VMs that can be run manually in QEMU.
+`testsGenerator` already provides interactive scenarios and guest access. Add
+`standaloneVMGenerator` only when a failed scenario attempt or verified
+compatibility constraint shows that scenario mode cannot run the required lab.
+Record that reason in the case README.
 
 ### Syntax
 
@@ -359,7 +362,8 @@ standaloneVMs.server-fixed
 
 ## Combining tests and standalone VMs
 
-Use Nix attribute-set merging:
+When standalone outputs are needed alongside tests, use Nix attribute-set
+merging:
 
 ```nix
 outputs = { nixpkgs, nice-archive-lib, ... }:
@@ -465,8 +469,22 @@ These fields are read in addition to the normal `testsGenerator` VM fields:
 | Field | Default | Description |
 | --- | --- | --- |
 | `oldKernelNixpkgs` | Top-level `oldKernelNixpkgs` | Per-VM old nixpkgs source. |
-| `oldKernelGraphics` | `isInteractive` | Graphics value for the old-kernel VM build. |
+| `oldKernelGraphics` | `isGraphics`, otherwise `false` | Graphics value for the old-kernel VM build; `null` defers to the historical NixOS default. |
 | `oldKernelRestrictNetwork` | `null` | Network restriction value for the old-kernel VM build. |
+
+Old-kernel guests default to headless output. Set `oldKernelGraphics = true`
+for a graphical guest. Interactive scenarios replace `-nographic` with
+`-display none` for headless old guests, preserving the test driver's serial
+and monitor connections. Automated tests keep their existing display rewrite.
+Modern helper VM launch scripts are copied unchanged.
+
+Interactive old-kernel guests receive a socket-activated SSH listener on
+vsock port 22 with an ephemeral host key. The wrapper preserves the base
+driver's vsock CID; it does not expose a guest TCP port. The historical guest
+needs virtio-vsock and systemd support for `ListenStream=vsock::22`; the host
+needs `/dev/vhost-vsock` and the base driver's `systemd-ssh-proxy` setup.
+Check the scenario status file's `ssh_verified` result before using an SSH
+command. `--popup false` controls terminal windows, not QEMU graphics.
 
 See [CVE-2022-32278](../cves/cve-2022-32278-graphical-libreoffice-rce/flake.nix) for a complete example of an old-kernel test case.
 
@@ -501,6 +519,11 @@ in
 
 The keys in `oldKernelVMs` must match the machine names in the base test
 driver.
+
+Interactive replacements need a guest SSH listener on vsock port 22. The
+wrapper expects `export startScripts` and each replaced interactive launch
+script to contain a `vhost-vsock-pci` device. The high-level generator
+installs the guest listener automatically.
 
 ## NixOS test-driver methods
 

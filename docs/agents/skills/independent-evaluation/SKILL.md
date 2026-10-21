@@ -18,8 +18,8 @@ from a clean guest state; a cached build is not a fresh execution. Preserve
 case files and package pins. Save distinct absolute logs under the supplied
 repository's `evaluation-logs/` directory, outside the case directory. Run
 tests sequentially if they share mutable resources. The CLI supports
-`--log file /absolute/path` for test logs; it does not currently expose a
-scenario status file or `begin-test-phase` command.
+`--log file /absolute/path` for test logs. This evaluation uses its own
+task deadline rather than the reproducer's shared phase clock.
 
 Bound each complete test within 30 minutes including the 30-second termination
 grace (for example, `timeout --kill-after=30s 29m30s`), or use a shorter

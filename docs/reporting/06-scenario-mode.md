@@ -17,8 +17,10 @@ nice-archive list-cves
 The CLI can start scenarios, run both test variants, list standalone VMs,
 and update flake locks. Its [guide](../cli-tool.md) explains command options,
 logging, and exit status. `scenario` and `test` stage the selected case for
-Git-backed flake evaluation, so inspect the Git index afterward. Use direct
-Nix commands only for operations the CLI does not support or for diagnosis.
+Git-backed flake evaluation, so inspect the Git index afterward. Start every
+scenario with `nice-archive scenario` and every automated variant with
+`nice-archive test`. Direct Nix is for unsupported operations or diagnosis;
+give it a finite command deadline and process timeout.
 
 ## Use an interactive scenario
 
@@ -29,12 +31,28 @@ interactive NixOS test-driver session:
 nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true --popup false
 ```
 
-You can also use the interactive version of the CLI to start the scenario mode.
+You can also use the interactive CLI menu. Each scenario call has a 10-minute
+limit from launch, including startup and shutdown.
+
+For a logged, bounded command proxy, use distinct log and status files per
+variant:
+
+```bash
+nice-archive scenario --case cve-yyyy-nnnn-short-name --vulnerable true \
+  --popup false --log file scenario-vulnerable.log \
+  --status-file scenario-vulnerable.status.json
+```
+
+Wait for `scenario> ` and read the status JSON. Check `ssh_verified` before
+using a printed SSH route. Submit one-line test-driver Python; wrap multiple
+statements with `exec("line 1\\nline 2")`. Read through
+`</scenario-command-output>`, then enter `:quit` and wait for process exit.
+The complete raw exchange is in the scenario log.
 
 Once ready, it prints SSH commands for each guest. Keep the scenario terminal
 open and use a printed SSH command from another terminal, or use the named VM
-objects in the test-driver prompt for bounded checks. Exit the driver with
-`Ctrl+D` and choose to stop the VMs. The [CLI guide](../cli-tool.md#open-a-scenario)
+objects in the test-driver prompt for bounded checks. In live mode, exit the
+driver with `Ctrl+D` and choose to stop the VMs. The [CLI guide](../cli-tool.md#open-a-scenario)
 explains popup windows, locking, and command options.
 
 ## Observe the security effect
@@ -50,9 +68,9 @@ explains popup windows, locking, and command options.
 Keep the sequence simple enough to translate into the automated test in the
 [next step](./07-test.md). Record exact guest commands and observations for the
 case README. If the scenario is unavailable, follow the separate
-[standalone VM guide](../standalone-vms.md) and document the manual network
-wiring. Scenario and automated-test VMs use their lab network; host port
-forwarding is only for standalone VM wiring.
+[standalone VM guide](../standalone-vms.md). Document why scenario mode could
+not run the lab and any manual network wiring. Scenario and automated-test VMs
+use their lab network; host port forwarding is only for standalone VM wiring.
 
 An exploit hang, VM timeout, or killed process is a failed or blocked run,
 not proof that the fixed version is safe. Collect diagnostics and repeat

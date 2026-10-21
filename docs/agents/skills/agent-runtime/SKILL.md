@@ -69,10 +69,11 @@ launch:
 | Ordinary command | 5 minutes |
 | VM or service readiness | 5 minutes |
 | Complete NixOS test | 30 minutes |
-| Complete interactive scenario | 45 minutes |
+| Complete interactive scenario call | 10 minutes |
 
 Use guest `timeout=` where supported and application connect/read timeouts.
-Runner-specific budgets may be shorter.
+The [reproducer lab skill](../lab-validation/SKILL.md) adds 40-minute manual
+and automated-test phase budgets. Runner-specific budgets may be shorter.
 
 Start each clock at process launch, including build, boot, execution, and
 shutdown. Do not extend a running deadline or restart work to reset its

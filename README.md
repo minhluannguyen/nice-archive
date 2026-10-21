@@ -149,15 +149,17 @@ To start a scenario:
 ```bash
 nice-archive scenario \
   --case cve-2020-7247-opensmtpd \
-  --vulnerable true \
-  --popup true
+  --vulnerable true
 ```
 
 This launches an interactive CPython session with the scenario loaded and all VMs started. Terminal windows also open for interacting directly with the individual VMs.
 
-<!-- TODO: Add a GIF demonstrating scenario mode. -->
-
-By default, VM terminal windows open automatically. You can disable them with `--popup false` and interact with the VMs exclusively through the scenario's Python terminal.
+By default, VM terminal windows open automatically. `--popup false` disables
+those windows, use the printed SSH commands to connect to the VMs instead.
+QEMU graphics are controlled by the case's VM settings. Each scenario call
+stops after 10 minutes, including startup and shutdown. For a logged session
+with a bounded `scenario> ` command proxy and a status file, see the
+[CLI guide](./docs/cli-tool.md#open-a-scenario).
 
 Scenario mode uses the Python interface provided by the [NixOS test framework](https://nixos.org/manual/nixos/stable/index.html#sec-nixos-tests). Some commonly used commands include:
 
@@ -175,7 +177,8 @@ server.succeed("id")
 server.succeed("journalctl -u <unit> --no-pager")
 ```
 
-To exit the scenario, press `Ctrl+D` in the Python terminal and choose to terminate the VMs. Only one scenario can run at a time.
+In the default live mode, press `Ctrl+D` in the Python terminal and choose to
+terminate the VMs. Only one scenario can run at a time.
 
 **Note:** The `test` and `scenario` commands automatically execute `git add <case-dir>` before evaluating flake outputs. This ensures that newly created files are visible to Nix's Git-backed flake evaluation. Be aware that this stages files in Git; review `git status` before committing.
 

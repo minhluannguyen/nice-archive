@@ -110,4 +110,13 @@ trigger code are appropriate. Fetch upstream patches immutably with verified
 hashes. The exact selection and acquisition source belong in the
 [case README](./09-case-readme.md).
 
+## Build complete upstream source when pins fail
+
+When no suitable historical nixpkgs package exists, use the
+[upstream and third-party package build guide](./upstream-and-third-party-builds.md).
+It covers source and dependency pins, plus Nix examples for npm, Python, Bash,
+Go, Rust, Maven, Gradle, C/C++, Composer, and Ruby. The same guide explains
+how to package case-owned exploit helpers without putting affected-product
+source in the case.
+
 **Previous:** [Step 1: Create or find the case](./01-create-case.md) · **Next:** [Step 3: Design the topology and choose a generator](./03-design.md)

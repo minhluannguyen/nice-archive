@@ -89,4 +89,21 @@ Nix store path or `/run/current-system/sw/bin/` in guest commands. Keep
 standalone-only port forwarding out of test and scenario VMs; see the
 [standalone VM guide](../standalone-vms.md) when manual wiring is necessary.
 
+## Check NixOS options against the VM pin
+
+Use `nixos-option` to inspect service settings, and record the queried NixOS
+release and revision alongside the result:
+
+```bash
+nixos-option system.nixos.release
+nixos-option system.nixos.revision
+nixos-option services.nginx
+nixos-option services.nginx.enable
+```
+
+These commands query the selected local configuration, not automatically the
+case's VM. Compare that revision with the VM's module-system pin. If they
+differ, inspect and evaluate the option at the VM's revision before using it;
+a historical package pin alone does not change NixOS module options.
+
 **Previous:** [Step 4: Write the case entry point](./04-entry-point.md) · **Next:** [Step 6: Use scenario mode to test exploitation](./06-scenario-mode.md)

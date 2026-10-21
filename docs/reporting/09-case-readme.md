@@ -31,6 +31,11 @@ State the generator, VM roles, package or system pins, exact software source
 artifact URLs, and verified hashes. Name the trigger, target-unique marker,
 evidence location, and vulnerable/fixed oracle.
 
+Briefly explain why the selected packaging method fits the required versions
+and environment. For a source-build fallback, name the concrete limitation of
+historical package or system pins; keep exact source details in `Sources and
+local adaptations` without repeating them.
+
 For more than one VM, show the numbered trigger and evidence flow:
 
 ```text
