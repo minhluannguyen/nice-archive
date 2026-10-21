@@ -36,9 +36,11 @@
           ]);
 
           runtimePackages = with pkgs; [
+            git
             nix
             openssh
             terminator
+            xterm
           ];
 
           runtimePath = pkgs.lib.makeBinPath runtimePackages;

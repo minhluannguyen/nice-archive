@@ -21,3 +21,8 @@ guest commands through its test-driver methods or the printed guest SSH
 command. The [CLI guide](../../../cli-tool.md#open-a-scenario) defines its
 actual prompts and exit sequence; do not assume runner-specific PTY controls
 are NICE Archive CLI flags.
+
+In `--log file` or `--log none` mode, wait for `scenario> `, submit one-line
+Python, and read through `</scenario-command-output>`. Use
+`exec("line 1\\nline 2")` for multiple statements. Enter `:quit` and wait
+for process exit; read transcript tails only for a concrete diagnostic need.

@@ -30,7 +30,11 @@ Choose the generator that can represent that design:
 
 Start with `testsGenerator` whenever possible. Replace only the affected
 machine when old-kernel support is needed; independent helpers can stay on a
-modern pin. If a complete manual VM is needed, consult the separate
+modern pin. Its generated scenarios provide manual guest access. Try scenario
+mode before adding standalone outputs. If scenario outputs are missing, check
+`generateInteractiveTests`; if the lab cannot run, record the failed command
+or verified compatibility constraint. Do not add standalone VMs just for
+manual terminals or to bypass a fixable scenario error. The fallback is in the
 [standalone VM guide](../standalone-vms.md). The
 [library reference](../nice-archive-libs.md) defines generator arguments,
 variants, and outputs. For browser, graphical, and multi-service choices, see

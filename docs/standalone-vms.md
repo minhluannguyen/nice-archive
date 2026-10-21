@@ -1,10 +1,10 @@
 # Standalone VMs for manual reproduction
 
-Standalone VMs are an optional alternative when a case needs separate guest
-terminals or an old environment cannot run a modern NixOS test driver. Use
-the interactive [scenario workflow](./reporting/06-scenario-mode.md)
-when it supports the required lab. Keep automated tests as the primary oracle
-when they are available.
+Standalone VMs are a fallback when the interactive
+[scenario workflow](./reporting/06-scenario-mode.md) cannot run the required
+lab. Scenario mode already provides guest terminals. Record the failed
+scenario command or verified compatibility constraint before adding standalone
+outputs. Keep automated tests as the primary oracle when available.
 
 ## Define the machines
 

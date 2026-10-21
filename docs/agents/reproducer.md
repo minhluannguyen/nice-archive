@@ -19,9 +19,11 @@ these skills in order:
    cleanup, index review, and handoff.
 
 Read the relevant step of the [technical reporting workflow](../reporting-vulnerabilities.md)
-when performing it. Use the NICE Archive CLI from the repository root for
-supported scenario and test operations. Direct Nix is for unsupported work or
-diagnosis; record why it was needed and return to the CLI for final validation.
+when performing it. Start every scenario with `nice-archive scenario` and
+every automated validation with `nice-archive test` from the repository root.
+Direct Nix is for unsupported work or diagnosis; give it finite tool and
+process deadlines, record why it was needed, and return to the CLI for final
+validation.
 
 If blocked, leave a coherent partial case. Give the exact failed command and
 output, distinguish verified from unverified work, and name the next concrete

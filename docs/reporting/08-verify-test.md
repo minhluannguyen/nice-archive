@@ -29,6 +29,9 @@ blocker, not a passing variant. Record exactly which commands ran and what
 each proved.
 
 Complete tests, scenarios, guest waits, and network triggers need finite
-deadlines. Review staged files and remove generated artifacts before finishing.
+deadlines. Each complete test, including build and execution, has a 30-minute
+ceiling and must also fit the remaining automated-test phase when configured.
+Do not start scenario or test flake outputs directly with `nix run`. Review
+staged files and remove generated artifacts before finishing.
 
 **Previous:** [Step 7: Write the automated test](./07-test.md) · **Next:** [Step 9: Write the case README](./09-case-readme.md)
