@@ -66,22 +66,25 @@ If you are an LLM agent working on a new report, follow this order:
    verified package pins before considering a source build.
 5. Design the minimum topology, target-unique marker, two-variant oracle, and
    appropriate generator.
-6. Implement the Nix files, role-organized trigger, initial `test.py`, and
-   initial README.
+6. Implement the Nix files, role-organized trigger, minimal `test.py` scaffold,
+   and initial README.
 7. Evaluate the generated outputs and independently confirm package versions.
-8. Start the vulnerable VM scenario with a scenario subagent only when the
-   capability gate passes; otherwise, the main agent owns the managed scenario.
-   Use standalone VMs only when scenario mode is unavailable or inappropriate.
+8. Start the 40-minute manual-validation clock with the first vulnerable VM
+   scenario. Use a scenario subagent only when the capability gate passes;
+   otherwise, the main agent owns the managed scenario.
+   Use standalone VMs only after confirming scenario mode cannot run the lab.
 9. Use VM-operator subagents with SSH, popup VM windows, or the test-driver
    shell to reproduce the vulnerable behavior manually.
-10. Repeat the identical manual trigger against the fixed scenario.
-11. Refine `test.py` from the observed workflow and end each branch with a
-    suitable `assertion_blocks` helper.
-12. Run vulnerable and fixed tests with finite timeouts, preferably through
-    test-runner subagents while the main agent monitors progress.
-13. Update the case README with verified commands, assertions, and LLM
+10. Attempt the identical manual trigger against the fixed scenario. Stop
+    manual work at 40 minutes and record any unresolved observation.
+11. Run `nice-archive begin-test-phase` before writing or refining `test.py`
+    after manual validation. In that one 40-minute phase, run both variants
+    with finite timeouts, and fix failures while time remains.
+    Use a suitable `assertion_blocks` helper and, when applicable, test-runner
+    subagents while the main agent monitors progress.
+12. Update the case README with verified commands, assertions, and LLM
     reproduction metadata.
-14. Report exactly what changed and what was verified.
+13. Report exactly what changed and what was verified.
 
 ## LLM reproduction contract
 
@@ -110,8 +113,8 @@ requirements:
   scenario mode running and VM-operator subagents to SSH into generated VMs and
   simulate the exploit from inside the lab. Otherwise, the main agent owns the
   managed scenario.
-- Use standalone VMs for manual validation when the NixOS test driver is not a
-  good fit.
+- Add standalone VMs only after checking that scenario mode cannot run the lab;
+  record the failed attempt or verified compatibility constraint.
 - Do not stop after Nix files evaluate; manually reproduce the exploit in a VM.
 - Reuse and adapt an existing PoC when available. If none exists, derive a
   minimal trigger from authoritative CVE material instead of inventing an
@@ -162,7 +165,27 @@ Enforce these hard wall-clock limits from process launch:
 | Ordinary command | 5 minutes |
 | VM or service readiness | 5 minutes |
 | Complete NixOS test, including build and execution | 30 minutes |
-| Complete interactive scenario, including startup, validation, and cleanup | 45 minutes |
+| One interactive scenario call, including startup, validation, and cleanup | 10 minutes |
+| Manual validation across scenario calls, from the first launch | 40 minutes |
+| Automated-test phase: write, run both variants, and fix `test.py` | 40 minutes |
+
+Set `NICE_ARCHIVE_PHASE_BUDGET_FILE` to a fresh file path before the first
+scenario, and keep that path for every CLI call in one reproduction attempt.
+The first scenario starts the manual clock. `nice-archive begin-test-phase` (or
+the first test, if that marker was missed) starts the test clock. Use a new
+path only for a genuinely new attempt; clearing the file during an attempt
+would reset the clocks. Without this environment variable, the CLI still
+enforces each scenario's 10-minute limit, but it cannot share phase clocks
+across separate invocations.
+The CLI checks the shared phase budget when a command starts. Bound an
+in-flight test by the shorter of its 30-minute limit and the phase time left.
+
+When manual validation reaches 40 minutes, terminate its owned scenarios and
+continue with the automated-test phase. Record incomplete manual evidence
+plainly. Start the 40-minute test-phase budget with
+`nice-archive begin-test-phase` before editing `test.py` after manual validation.
+It includes both complete automated variants and debugging. Do not reset either
+phase budget by restarting a command.
 
 Set both the command tool deadline and a process-level watchdog where
 available. Do not extend a running deadline or restart merely to reset it.
@@ -176,6 +199,10 @@ not expired. Enforce the inactivity cutoff independently: poll at or before two
 and four minutes, then check at five minutes rather than waiting for a
 six-minute poll. Repeated identical output and mere process existence are not
 progress.
+
+After two identical command failures, inspect the error and make a material
+change before retrying. Do not spend the phase budget repeating an unchanged
+failure.
 
 ### Subagent orchestration
 
@@ -195,9 +222,10 @@ termination.
 For manual validation, use this pattern when practical:
 
 1. Start `nice-archive scenario --case <case> --vulnerable <true|false>
-   --popup false` in a dedicated scenario subagent. The subagent should keep
+   --popup false --log file <variant-log> --status-file <variant-status.json>`
+   in a dedicated scenario subagent. The subagent should keep
    the scenario running as a managed session, capture the printed SSH commands,
-   and report readiness plus new output. Apply the 45-minute process-level
+   and report readiness plus new output. Apply the 10-minute process-level
    deadline from launch.
 2. Spawn one or more VM-operator subagents to connect with the printed SSH
    commands. They should run bounded guest-side health checks, execute the
@@ -219,7 +247,8 @@ whether the test is stuck under the two-minute polling and five-minute
 inactivity watchdog. If the watchdog fires, the main agent instructs the
 subagent to interrupt or terminate the test, or terminates the managed session
 itself. Otherwise, the main agent owns the managed test command. Apply the
-30-minute process-level deadline from launch.
+remaining time in the 40-minute automated-test phase as the process-level
+deadline from launch.
 
 ### Isolation gate
 
@@ -230,11 +259,7 @@ controlling isolated environments.
 
 Before executing target software, a PoC, malformed input, crash test, or
 resource-exhaustion trigger, state the selected boundary and confirm the
-command runs inside it. Prefer NixOS test or standalone VMs. Containers are
-appropriate only for user-space flaws that cannot affect the host kernel,
-container runtime, devices, or host privileges. Kernel bugs, local privilege
-escalation, system services, destructive tests, resource exhaustion, and
-uncertain PoCs require a VM.
+command runs inside it. Prefer NixOS test or standalone VMs.
 
 `nix-shell` and `nix develop` isolate dependencies but are not security
 boundaries. They can build or launch a lab; they do not make host execution of
@@ -257,8 +282,6 @@ Archive only when all of the following are true:
 - the vulnerable target runs on Linux;
 - the affected behavior and its required configuration apply to the Linux
   build;
-- vulnerable and fixed behavior can reasonably be represented with Nix,
-  NixOS, Linux VMs, or a suitable Linux container; and
 - a deterministic, machine-checkable Linux-side oracle is possible.
 
 For cross-platform software, verify from authoritative evidence that the Linux
@@ -445,15 +468,15 @@ compatible with package-level pinning. Do not build a specific boundary release
 from source merely because it is the newest affected version.
 
 Never copy, transcribe, extract, vendor, or reconstruct affected-product source
-into the case directory. This includes full source snapshots, individual
-upstream source files, copied functions, and reduced local reimplementations of
-the vulnerable code. Obtain the target from an immutable nixpkgs revision or
-make Nix fetch a complete, hash-verified release, tag, or commit from the
-original upstream project and build it in the sandbox. Nix may unpack that
-fetched source during the build. Case-owned Nix expressions, VM configuration,
-wrappers, tests, and exploit/trigger code remain appropriate. Fetch any needed
-upstream or nixpkgs target patch by immutable URL and verified hash rather than
-copying its source hunks into the case.
+into the case directory or a recipe for modification. This includes full source
+snapshots, individual upstream source files, copied functions, and reduced local
+reimplementations of the vulnerable code. Obtain the target from an immutable
+nixpkgs revision or make Nix fetch a complete, hash-verified release, tag, or
+commit from the original upstream project and build it in the sandbox. Nix may
+unpack that fetched source during the build. Case-owned Nix expressions, VM
+configuration, wrappers, tests, and exploit/trigger code remain appropriate.
+Fetch any needed upstream or nixpkgs target patch by immutable URL and verified
+hash rather than copying its source hunks into the case.
 
 Use this priority order:
 
@@ -502,13 +525,112 @@ by a failed Nix build and then rerun with the verified value. See
    low-level behavior.
 4. Only if no suitable vulnerable or fixed package is available through the
    applicable nixpkgs strategies above, define a package or use `overrideAttrs`
-   to fetch and build the complete original upstream source. See
+   to fetch and build the complete original upstream source. Choose the
+   language-specific nixpkgs builder when one exists: for example,
+   `buildNpmPackage` for npm projects or `buildMavenPackage` for Maven projects;
+   use an appropriate Composer builder for PHP projects when available. Use
+   the project's package-manager lockfile and the builder's dependency hash or
+   other pin mechanism when available. Verify that the lockfile, dependency
+   resolution, and source hash match the selected vulnerable or fixed version;
+   do not let a build silently resolve newer external dependencies. Keep any
+   large or complex packaging configuration in separate Nix files under
+   `package/` or `package/<target>/`, imported by the VM configuration. See
    [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/) for a
    source-build example.
 
 Keep package-selection logic close to the VM that needs it. Avoid moving
 user-space package selection into the top-level `flake.nix` unless the whole
 system pin must change.
+
+#### Examples: packaging upstream projects absent from nixpkgs
+
+This compact npm template shows the two independent pins: the complete
+upstream source and its dependencies. Supply verified values for **both**
+variants; the hashes shown here are placeholders. The fetched source must
+contain its own `package.json` and `package-lock.json`.
+
+```nix
+# package/target.nix
+{ pkgs, isVulnerable }:
+let
+  selected = if isVulnerable then {
+    version = "<affected-version>"; rev = "<affected-commit>";
+    sourceHash = "sha256-<source-hash>"; depsHash = "sha256-<npm-deps-hash>";
+  } else {
+    version = "<fixed-version>"; rev = "<fixed-commit>";
+    sourceHash = "sha256-<source-hash>"; depsHash = "sha256-<npm-deps-hash>";
+  };
+in pkgs.buildNpmPackage {
+  pname = "<project>";
+  inherit (selected) version;
+  src = pkgs.fetchFromGitHub {
+    owner = "<owner>"; repo = "<repo>";
+    inherit (selected) rev;
+    hash = selected.sourceHash;
+  };
+  npmDepsHash = selected.depsHash;
+}
+```
+
+Use the same source-selection pattern with the builder and dependency pin
+appropriate to the project:
+
+| Project | Builder | Dependency pin from fetched upstream source |
+| --- | --- | --- |
+| npm | `pkgs.buildNpmPackage` | `package-lock.json` and `npmDepsHash` |
+| Maven | `pkgs.maven.buildMavenPackage` | Maven dependency resolution and `mvnHash`; add the project's JAR install phase |
+| Composer | `pkgs.php.buildComposerProject2` when present in the pinned nixpkgs | `composer.lock` and `vendorHash` |
+
+Import a large expression in the VM with
+`import ./package/target.nix { inherit pkgs isVulnerable; }`. Check the chosen
+nixpkgs revision for the builder's exact API, and verify both installed versions
+and dependency hashes. Never copy upstream manifests, lockfiles, or source into
+the recipe to modify them.
+
+Existing CVE cases illustrate related choices: [CVE-2013-0249](../cves/cve-2013-0249-curl-sasl-buffer-overflow/curl-7.27.0-package.nix)
+fetches a complete curl release with a source hash; [CVE-2021-44228](../cves/cve-2021-44228-log4shell/exploit/vuln_server/vuln-server-package.nix)
+builds a **guest helper** against separate locked Maven dependency repositories.
+These cases illustrate source acquisition and pinning; neither uses the npm or
+Composer builders in the table. See the
+[nixpkgs npm builder](https://nixos.org/manual/nixpkgs/stable/#javascript-buildNpmPackage)
+and [Maven builder](https://nixos.org/manual/nixpkgs/stable/#maven) references
+for the builder-specific fields.
+
+### Searching for NixOS options
+
+Use `nixos-option` to discover service options before writing custom module
+settings. First identify the release and revision of the configuration being
+queried:
+
+```bash
+nixos-option system.nixos.release
+nixos-option system.nixos.revision
+```
+
+Record these alongside the lookup: option names, types, defaults, and behavior
+can differ between nixpkgs/NixOS versions. Then inspect the service:
+
+```bash
+nixos-option services.nginx
+nixos-option services.nginx.enable
+```
+
+The first command lists the options under `services.nginx`. The second shows
+the option's value, default, type, description, and declaring module. Both
+commands were verified; `enable` is a boolean with default `false`.
+
+These queries inspect the local NixOS configuration, not automatically the
+case's flake. The verified lookup used NixOS `26.05`, revision
+`a3116115851d68b8952a2a4221cc25a84e56b532`; this is an example, not a required pin.
+If revision metadata is unavailable, record that and obtain the pin from the
+queried configuration's lock file or source reference instead of guessing.
+
+Compare the queried revision with the VM's actual module-system pin. If they
+differ, inspect the option at the VM's revision and evaluate the case
+configuration before using it; a current option is not proof that an older
+module supports it. A historical package pin alone does not change the
+available NixOS options. Use `nixos-option --help` for selecting another
+configuration.
 
 ## 3. Choose the VM topology
 
@@ -573,16 +695,24 @@ Use this decision table:
 | --- | --- |
 | Normal package-level vulnerability | `testsGenerator` |
 | Vulnerable/fixed full system must come from different nixpkgs pins | `testsGenerator` with `variant = "system"` |
-| Modern test exists, but humans also need direct/manual VMs | Add `standaloneVMGenerator` |
+| Scenario mode cannot run the required lab, confirmed by a failed attempt or verified compatibility constraint | Add `standaloneVMGenerator` only for that fallback |
 | One or a few VMs must boot an old kernel / old NixOS while the test driver can stay modern | `oldKernelTestsGenerator` |
 | You need custom low-level old-kernel patching | `oldKernelNixosTest` |
 | The whole reproduction is too old for modern NixOS tests | `default.nix`, `npins`, and standalone/manual VMs |
 
 Most new reports should start with `testsGenerator`.
 
+It already generates scenarios that start the VMs and provide manual access.
+Check the generated scenario outputs and try scenario mode before adding
+standalone VMs. If outputs are missing, first check whether
+`generateInteractiveTests` was disabled. A known, verified incompatibility can
+establish that fallback without repeating a failing launch; record the evidence
+in the case README. Do not add both generators by default or to bypass a
+fixable configuration error or scenario-lock wait.
+
 When using old-kernel support, prioritize replacing only the vulnerable
-target. If many machines must be old at the same time, the standalone/manual
-path is usually easier to debug and document.
+target. Even when several machines need historical systems, check scenario
+compatibility before selecting the standalone/manual fallback.
 
 ## 5. Write `flake.nix`
 
@@ -643,8 +773,7 @@ or old NixOS releases where the modern NixOS test framework did not yet exist
 or did not have the features needed by the reproduction.
 
 Also remember the Git behavior of flakes: files must be visible to Git before
-Nix copies the flake source into the store. The Flakes wiki calls this out
-explicitly. The NICE Archive CLI stages the selected case before flake-based
+Nix copies the flake source into the store. The NICE Archive CLI stages the selected case before flake-based
 test/scenario runs, but you should still review `git status`.
 
 ### Package variant
@@ -740,6 +869,15 @@ nixpkgs revision:
     };
 }
 ```
+
+Old-kernel VMs default to headless output in both tests and scenarios. Use
+`oldKernelGraphics = true` for a graphical guest; `null` defers to historical
+NixOS defaults and does not mean headless. Scenario SSH uses a dedicated
+guest vsock listener and the base driver's matching QEMU vsock device.
+Verify the printed SSH command before relying on popup terminals. The host
+needs the base driver's `systemd-ssh-proxy` setup, and the old guest needs
+virtio-vsock and systemd vsock socket support. See the
+[library reference](./nice-archive-libs.md#oldkerneltestsgenerator) for details.
 
 ## 6. Write VM modules
 
@@ -839,9 +977,7 @@ import assertion_blocks as ab
 
 start_all()
 
-# Wait for the target service; the trigger requires a reachable server.
-server.wait_for_unit("multi-user.target", timeout=120)
-server.wait_for_unit("vulnerable-service.service", timeout=120)
+# Wait for the prerequisite the trigger actually needs.
 server.wait_for_open_port(8080, timeout=60)
 variant = server.succeed(
     "cat /etc/nice-archive/cve-yyyy-nnnn-variant",
@@ -849,7 +985,6 @@ variant = server.succeed(
 ).strip()
 
 # Run the same bounded trigger in both variants and collect its evidence.
-attacker.wait_for_unit("multi-user.target", timeout=120)
 status, output = attacker.execute(
     "run-exploit http://server:8080",
     timeout=30,
@@ -943,15 +1078,31 @@ command exited. The full helper list and attack-type mapping is in the
 ```python
 ab.check_file_exists(server, "/tmp/important.txt", timeout=90)
 ab.check_file_contains(attacker, "/tmp/leak.txt", "secret", timeout=90)
-ab.check_root_privileges(server, "newuser", timeout=90)
+ab.check_root_gid(server, "newuser", timeout=90)
 ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
-Some important points:
+### Keep tests concise and declarative
 
-- The test is also a list of steps for a human to reproduce the exploit
-  manually. Keep it readable and avoid unnecessarily complex Python.
-- The test should handle both vulnerable and fixed variants.
+Write a short, linear reproduction: necessary readiness, the trigger, and
+security assertions for each variant. Use direct test-driver methods and brief
+phase comments; avoid generic test utilities and repeated status dumps.
+
+- Wait for the prerequisite the next step needs: a port, unit, file, or
+  application response. Do not routinely stack all of these checks. Add an
+  application-readiness wait when service initialization is asynchronous.
+- `getent`, ping, and extra connection probes are diagnostic tools, not a
+  required preamble. Keep them only when a specific communication dependency
+  makes them necessary. Collect extra diagnostics in scenario mode or on failure.
+- Reuse trigger or oracle evidence that establishes fixed-target health, such
+  as a valid application rejection or successful normal operation. Add one
+  bounded benign check only if needed. An absent marker, connection failure,
+  or timeout alone does not prove the target is functional.
+- Preserve the same trigger, required security boundaries, and meaningful
+  vulnerable/fixed assertions when simplifying the sequence.
+
+The managed-session watchdog and its progress checks still apply while running
+tests and scenarios.
 
 ### Bound waits and blocking triggers
 
@@ -975,23 +1126,36 @@ assert status != 124, f"exploit timed out instead of producing a result: {output
 ```
 
 The same `timeout=` convention applies to `succeed`, `fail`, polling helpers,
-and wait helpers. Also set connect and read timeouts inside network PoCs. Use a
+wait helpers, and `assertion_blocks` helpers that accept a timeout. Choose
+short, operation-specific values so a failed wait does not consume a large
+fraction of the 40-minute phase before the other variant or a fix can run.
+Routine commands and checks should normally take seconds or tens of seconds,
+not several minutes.
+Give services that genuinely need longer to initialize a realistic bounded
+readiness wait; base it on observed startup behavior, and do not repeat the
+same long wait for unrelated prerequisites. Also set connect and read timeouts
+inside network PoCs. Use a
 shell-level timeout only below the test-driver API or when no native timeout
 parameter exists, and document that exception. Bound custom retry loops by
 elapsed time or attempt count. VM and service readiness must fail after five
 minutes. Complete CLI-driven NixOS tests, including initial downloads and
-builds, must fail after 30 minutes. Interactive scenarios must terminate after
-45 minutes. Host-side shell `timeout` around the complete `nice-archive`
-command remains the process watchdog; it is distinct from guest-command
+builds, must fail after 30 minutes and within the remaining automated-test
+phase budget. Each interactive scenario call must terminate after 10 minutes.
+The `nice-archive scenario` command enforces this limit and reserves
+the final 30 seconds for shutdown. Host-side shell `timeout` around the complete
+`nice-archive` command remains the process watchdog; it is distinct from guest-command
 timeouts in `test.py`. The two-minute polling and five-minute inactivity cutoff
 still apply and may terminate an operation earlier. On timeout, collect
 diagnostics and fail clearly; never count a timeout alone as a passing fixed
 result.
 
-## 8. Add standalone VMs when useful
+## 8. Add standalone VMs only when scenario mode cannot work
 
-Standalone VMs are for manual reproduction and debugging. Add them only when a
-human benefits from opening a machine outside the test driver or the test driver is not compatible with the vulnerable environment.
+Use the scenarios generated by `testsGenerator` for manual reproduction and
+debugging first. Add standalone outputs only after checking that scenario mode
+cannot run the required lab. Record the failed command or verified
+compatibility constraint and why standalone VMs resolve it. The following
+combined output is a fallback example, not the default case template.
 
 ```nix
 nice-archive-lib.testsGenerator {
@@ -1032,16 +1196,28 @@ nice-archive vm --case cve-yyyy-nnnn-short-name --name server-vulnerable
 
 ## 9. Use the CLI for testing and debugging
 
-Use the NICE Archive CLI whenever it supports the operation. Use it for case
-discovery, flake updates for flake-backed cases, scenarios, standalone VMs,
-and vulnerable/fixed tests. Do not replace supported CLI operations with
-guessed flake attributes, direct QEMU commands, or ad hoc containers.
+Use the NICE Archive CLI for case discovery, flake updates for flake-backed
+cases, standalone VMs, and all scenario and vulnerable/fixed test runs. Start
+every interactive scenario with `nice-archive scenario` and every automated
+variant with `nice-archive test`; these commands are mandatory even when the
+corresponding flake output is known. Do not replace them with direct `nix run`
+of the scenario/test output, direct QEMU commands, or ad hoc containers.
 
 Run CLI commands from the repository root. Outside the development shell, use
-`nix run . --` followed by the same NICE Archive arguments. Direct `nix build`,
+`nix run . --` followed by the same NICE Archive arguments; this invokes the
+CLI, not a case's scenario or test output directly. Bound and monitor this Nix
+wrapper invocation under the same scenario or test limits. Direct `nix build`,
 `nix run`, or `nix eval` is allowed only when no CLI operation fits or when
-diagnosing a CLI/generated-output failure. Record the reason and perform final
-vulnerable/fixed validation through `nice-archive test`.
+diagnosing a CLI/generated-output failure. Record the reason. Give every direct
+Nix command both a finite command-tool deadline and a process-level timeout
+within the applicable activity and phase budgets, and inspect its output and
+exit status. For a command that may run
+longer than two minutes, use a managed session and poll at least every two
+minutes; enforce the five-minute inactivity cutoff and terminate its owned
+process group at the deadline. A subagent may monitor that managed command
+only if the main agent receives a detached handle it can poll and terminate;
+the subagent does not replace the timeout or the main agent's watchdog.
+Perform scenario and vulnerable/fixed test validation through the CLI.
 
 List cases:
 
@@ -1059,7 +1235,7 @@ nice-archive test --case cve-yyyy-nnnn-short-name --vulnerable false
 For LLM agents, use a test-runner subagent only when it returns a detached,
 cancellable session handle. Otherwise, the main agent must own the managed
 test command. Poll at least every two minutes, apply the five-minute inactivity
-cutoff, and enforce the 30-minute total test limit.
+cutoff, and enforce the 40-minute total test-phase limit.
 
 Save a full log with a custom filename:
 
@@ -1100,8 +1276,23 @@ Start an interactive scenario directly:
 nice-archive scenario \
   --case cve-yyyy-nnnn-short-name \
   --vulnerable true \
-  --popup false
+  --popup false \
+  --log file scenario-vulnerable.log \
+  --status-file scenario-vulnerable.status.json
 ```
+
+File mode saves the complete scenario transcript while exposing a bounded
+`scenario> ` command proxy. Read the status JSON after readiness and check
+`ssh_verified` before using a printed SSH command. Submit one-line test-driver
+Python to the scenario stdin; use
+`exec("line 1\\nline 2")` when multiple Python statements are required. Each
+response ends with `</scenario-command-output>` and is bounded; the full raw
+exchange remains in the log. Enter `:quit` to stop the scenario and its VMs,
+then wait for the managed process to exit. Use distinct log and status files
+for vulnerable and fixed variants. Files named `scenario-*.log` and
+`scenario-*.status.json` are ignored generated artifacts, and normal case
+cleanup preserves the scenario transcripts. `--log live` retains the direct human REPL,
+and `--log none` uses the bounded proxy without saving a transcript.
 
 What the scenario command does:
 
@@ -1110,7 +1301,9 @@ What the scenario command does:
 3. waits until the NixOS test driver exposes SSH backdoors;
 4. runs the interactive setup block generated by the library;
 5. prints SSH commands for each VM; and
-6. optionally opens `terminator` windows when `--popup true`.
+6. verifies each advertised SSH route with a bounded connection; and
+7. optionally opens independent `terminator` windows when `--popup true`, with
+   an `xterm` fallback on startup failure (`--terminal xterm` bypasses GTK).
 
 Inside the interactive test-driver session, useful commands are:
 
@@ -1121,7 +1314,8 @@ server.succeed("id")
 server.succeed("journalctl -u vulnerable-service --no-pager")
 ```
 
-Exit with `Ctrl+D` in the scenario terminal and choose to kill the VMs.
+In live mode, exit with `Ctrl+D` and choose to kill the VMs. In file or none
+mode, enter `:quit` at `scenario> ` and wait for the process to exit.
 
 ## 11. Debug and reproduce on real VMs
 
@@ -1168,19 +1362,20 @@ Inside the VM, run the exploit exactly as a human researcher would, check logs,
 and inspect files. When the manual flow works, translate the commands into
 `test.py`.
 
-For LLM agents with subagents, run terminal 1 in a scenario subagent and use
-VM-operator subagents for terminal 2 and any additional attacker, client, or
-server sessions. The main agent should keep the printed SSH commands, decide
-which VM each operator should enter, compare the evidence they report, and
-terminate the scenario after both vulnerable and fixed observations are
+For LLM agents with subagents, run terminal 1 with `--log file` and
+`--status-file` in a scenario subagent, then use VM-operator subagents for
+terminal 2 and any additional attacker, client, or server sessions. The main
+agent should read the verified SSH commands from the status JSON, decide which
+VM each operator should enter, compare the evidence they report, enter `:quit`,
+and wait for the scenario to exit after each variant's observations are
 recorded.
 
 ### Path B: run standalone VMs manually
 
-Use this path when the vulnerability is too old or too awkward for the modern
-NixOS test driver, or when the report needs manual VM terminals. This is common
-for old Nixpkgs revisions that do not have NixOS Tests or advanced test-driver
-features.
+Use this path only after checking that scenario mode cannot run the required
+lab, for example because a historical environment is incompatible with the
+test driver. Manual VM terminals are already available through scenario mode.
+Record the failed attempt or verified compatibility constraint in the README.
 
 Expose standalone VMs with `standaloneVMGenerator`, then list them:
 
@@ -1333,6 +1528,11 @@ Do not describe a source build merely as “from source.” Say whether Nix fetc
 the original upstream repository, an upstream release archive, or a named
 registry package. If vulnerable and fixed variants come from different places,
 identify both and explain the difference.
+
+Explain the package choice in one or two sentences: why this acquisition
+method fits the required versions and environment. For a source build or other
+fallback, name the concrete limitation of the earlier packaging options. Keep
+exact source details in `Sources and local adaptations` without repeating them.
 
 Then show the security-relevant flow with a numbered VM diagram:
 
@@ -1564,6 +1764,8 @@ Before considering the report done:
 - [ ] Existing PoC or regression-test material was reused or adapted when
       available; any derived trigger cites its authoritative basis.
 - [ ] `flake.nix` uses the appropriate generator.
+- [ ] Standalone outputs are added only after checking scenario mode and
+      recording why it cannot run the required lab.
 - [ ] VM names are clear and match variables in `test.py`.
 - [ ] The topology is the minimum realistic model: required service and trust
       boundaries use separate VMs, while unnecessary helper VMs are omitted.
@@ -1578,6 +1780,7 @@ Before considering the report done:
       nixpkgs or is built by Nix from a named upstream repository, release
       archive, or registry package, with its exact identity, pin, and hash.
 - [ ] The case README points to `test.py` as the automated oracle.
+- [ ] The README briefly explains why each packaging method was selected.
 - [ ] The case README follows the required compact section order without
       duplicate sections or unnecessary implementation narrative.
 - [ ] A multi-VM README includes a compact VM-node diagram with numbered arrows
@@ -1592,12 +1795,16 @@ Before considering the report done:
 - [ ] Potentially blocking operations and fixed-variant checks have finite
       timeouts.
 - [ ] Ordinary commands, readiness checks, complete tests, and scenarios obey
-      the 5/5/30/45-minute hard limits.
+      their five-, 30-, and 10-minute limits; manual validation and the full
+      automated-test phase each obey their 40-minute budgets.
 - [ ] Managed sessions are polled at least every two minutes and terminated
       after five minutes without meaningful output or a bounded response.
 - [ ] Final scenarios, standalone VMs, applicable flake updates, and
-      vulnerable/fixed tests use the NICE Archive CLI whenever it supports the
-      operation.
+      vulnerable/fixed tests use the NICE Archive CLI; no scenario or test
+      output was started with direct `nix run`.
+- [ ] Every necessary direct Nix command had a finite tool deadline and
+      process-level timeout, and its output and status were monitored by the
+      main agent or an eligible subagent.
 - [ ] A subagent owns a long-running process only when the main agent receives
       a detached session handle it can poll and terminate independently.
 - [ ] The case README contains LLM model, harness, shell, elapsed time, token,
