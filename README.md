@@ -187,7 +187,7 @@ The menu lets you select a CVE case and then:
 
 ### Scenario helper
 
-The scenario helper is the preferred debugging interface for multi-VM tests:
+Use the scenario helper to start interactive test-driver VMs:
 
 ```bash
 nice-archive scenario \
@@ -198,6 +198,23 @@ nice-archive scenario \
 
 This runs the interactive NixOS test driver and starts the VMs. With
 `--popup true`, terminal windows open for interacting with the VMs.
+`--popup false` disables SSH terminal windows; case graphics settings control
+QEMU windows separately.
+
+For a logged session with bounded command responses, use `--log file` and a
+status file. The status file records guest SSH commands and the result of each
+connection check:
+
+```bash
+nice-archive scenario --case <case> --vulnerable true --popup false \
+  --log file scenario-vulnerable.log \
+  --status-file scenario-vulnerable.status.json
+```
+
+Wait for `scenario> `, enter one-line test-driver Python, and read through
+`</scenario-command-output>`. Enter `:quit` to stop the VMs. Use distinct log
+and status filenames for the fixed variant. Each scenario call stops after
+10 minutes, including startup and shutdown.
 
 The user can also interact with the VMs through the test driver terminal. Some common commands are:
 
@@ -208,8 +225,8 @@ server.succeed("id")
 server.succeed("journalctl -u <unit> --no-pager")
 ```
 
-Exit the scenario with `Ctrl+D` in the scenario terminal and choose to kill the
-VMs.
+In the default live mode, exit with `Ctrl+D` in the scenario terminal and
+choose to kill the VMs.
 
 The CLI takes an exclusive file lock before starting a scenario and releases it
 when the scenario exits. By default the lock is
@@ -225,28 +242,16 @@ Git-backed flake evaluation. Review `git status` before committing.
 
 ## Direct Nix usage
 
-The CLI is recommended because it knows the modern output names and legacy
-fallbacks. Direct Nix commands are still useful when debugging a case.
+Start scenarios with `nice-archive scenario` and automated variants with
+`nice-archive test`. Outside the development shell, invoke the same CLI from
+the repository root with `nix run . -- scenario ...` or
+`nix run . -- test ...`. Bound and monitor these wrapper commands too.
 
-Modern library-backed cases expose outputs like:
-
-```bash
-cd cves/<case>
-
-nix run .#test-vulnerable-true-x86_64-linux
-nix run .#test-vulnerable-false-x86_64-linux
-nix run .#start-scenario-vulnerable-true-x86_64-linux
-nix run .#standaloneVMs.<vm-name>
-```
-
-Some older cases still expose legacy names such as:
-
-```bash
-nix run .#testVulnerableTrue
-nix run .#testVulnerableFalse
-```
-
-If an output name fails, inspect the case's `flake.nix` or use the CLI first.
+Use direct Nix commands for unsupported operations or diagnosis. Give each
+command a finite deadline and process-level timeout; inspect its output and
+exit status. For commands that may exceed two minutes, use a managed session
+with the watchdog described in the
+[reporting guide](./docs/reporting-vulnerabilities.md#shell-execution-gate).
 
 ## Documentation
 

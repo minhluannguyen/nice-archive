@@ -92,7 +92,7 @@ in
       sshBackdoorConfig
     ]
     ++
-    lib.optionals (!isTest || (isOldKernelVM && isScenario)) [
+    lib.optionals (!isTest || isOldKernelVM) [
       "${modulesPath}/virtualisation/qemu-vm.nix"
     ]
     ++ 

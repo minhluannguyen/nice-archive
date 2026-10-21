@@ -270,8 +270,11 @@ ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 
 ## `standaloneVMGenerator`
 
-Use `standaloneVMGenerator` when a case should expose manually runnable VMs in
-addition to automated tests.
+`testsGenerator` already generates interactive scenarios that start the VMs.
+Check those scenarios first. Add `standaloneVMGenerator` only when scenario mode
+cannot run the required lab; record the failed scenario command or verified
+compatibility constraint in the case README. Manual access alone is not a
+reason to add standalone outputs.
 
 ### Syntax
 
@@ -327,7 +330,9 @@ standaloneVMs.server-fixed
 
 ## Combining tests and standalone VMs
 
-Use Nix attribute-set merging:
+Use this combination only after confirming the scenario limitation described
+above. Tests with working scenario mode normally need only `testsGenerator`.
+When standalone outputs are necessary, use Nix attribute-set merging:
 
 ```nix
 outputs = { nixpkgs, nice-archive-lib, ... }:
@@ -430,8 +435,28 @@ These fields are read in addition to the normal `testsGenerator` VM fields:
 | Field | Default | Description |
 | --- | --- | --- |
 | `oldKernelNixpkgs` | Top-level `oldKernelNixpkgs` | Per-VM old nixpkgs source. |
-| `oldKernelGraphics` | `isInteractive` | Graphics value for the old-kernel VM build. |
+| `oldKernelGraphics` | `isGraphics`, otherwise `false` | Graphics value for the old-kernel VM build; `null` leaves the historical NixOS default in effect. |
 | `oldKernelRestrictNetwork` | `null` | Network restriction value for the old-kernel VM build. |
+
+Old-kernel tests and scenarios are headless by default. Set
+`oldKernelGraphics = true` (or `isGraphics = true`) for graphical guests.
+The wrapper translates headless QEMU output to `-display none`, preserving
+the test driver's serial and monitor connections. Modern helper VM launch
+scripts are copied unchanged.
+
+Interactive old-kernel guests receive a dedicated, socket-activated SSH
+backdoor on vsock port 22. The wrapper preserves the base driver's vsock CID
+for each replaced node, including when modern helpers precede it. The guest
+listener uses its own SSH configuration and an ephemeral host key; it neither
+opens a TCP port nor changes the case's ordinary SSH service. Lab root has an
+empty initial password by default; explicit case credentials take precedence.
+Automated variants do not enable this SSH listener.
+
+The historical guest needs virtio-vsock kernel support and systemd support for
+`ListenStream=vsock::22`. The host needs `/dev/vhost-vsock` and the
+`systemd-ssh-proxy` SSH configuration used by the base driver's printed
+commands. `--popup false` disables only the CLI's SSH terminal windows;
+QEMU graphics are controlled separately by the VM fields above.
 
 ### LibreOffice-style graphical example
 
@@ -499,6 +524,13 @@ in
 The keys in `oldKernelVMs` must match the machine names in the base test
 driver.
 
+Each supplied NixOS evaluation must expose `config.virtualisation.graphics`
+(import its `virtualisation/qemu-vm.nix` module). Interactive replacements
+must also provide a guest SSH listener on vsock port 22; the high-level
+generator installs this automatically. This wrapper expects a base driver
+with `export startScripts` and, for interactive replacements, a
+`vhost-vsock-pci` device in each original launch script.
+
 ## Python assertion blocks
 
 `testsGenerator` and `oldKernelTestsGenerator` add the `assertion_blocks`
@@ -519,7 +551,7 @@ Available helpers:
 | Helper | Purpose |
 | --- | --- |
 | `check_service_log_contains(machine, check_message, unit, failed_message="", timeout=60)` | Wait for text in a systemd unit journal. |
-| `check_root_privileges(machine, user, timeout=90)` | Check that a user has root UID and GID. |
+| `check_root_gid(machine, user, timeout=90)` | Check that a user has root UID and GID. |
 | `check_screen_text(machine, text, timeout=60)` | Use OCR to wait for text on the VM screen. Requires `enableOCR = true`. |
 | `check_file_exists(machine, file_path, is_existing=True, timeout=90)` | Check that a path exists or remains absent. |
 | `check_file_contains(machine, file_path, content, timeout=90, is_existing=True)` | Check that an existing file contains or omits text. |
@@ -540,7 +572,7 @@ Use existing cases as models:
 
 | Vulnerability or proof type | Preferred assertion blocks | Model cases |
 | --- | --- | --- |
-| Privilege escalation | `check_root_privileges` | Dirty COW, PwnKit, chwoot |
+| Privilege escalation | `check_root_gid` | Dirty COW, PwnKit, chwoot |
 | DoS / infinite loop / CPU exhaustion | `check_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
 | Memory exhaustion | `check_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
 | File write, overwrite, deletion, or preservation | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
@@ -556,7 +588,7 @@ Use existing cases as models:
 ```python
 import assertion_blocks as ab
 
-ab.check_root_privileges(server, "newuser", timeout=90)
+ab.check_root_gid(server, "newuser", timeout=90)
 ```
 
 ### DoS / CPU exhaustion example
