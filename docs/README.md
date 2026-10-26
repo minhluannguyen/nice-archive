@@ -30,6 +30,4 @@ Archive as a reproducible vulnerability-reporting framework.
   [evaluator](./agents/evaluator.md) role. Focused `SKILL.md` files under
   [agent skills](./agents/skills/) contain the shared gates and role workflows.
 
-- [CVE OpenCode batch orchestrator](./CVE_ORCHESTRATOR_README.md)
-  Use this when running unattended multi-CVE OpenCode experiments and collecting
-  batch-level result metadata.
+- [CVE batch orchestrator](./CVE_ORCHESTRATOR_README.md): Documentation for automated CVE reproduction pipeline and evaluation using multiple LLM agents.
