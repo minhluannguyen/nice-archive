@@ -1,0 +1,146 @@
+
+baseURL = "https://minhluannguyen.github.io/nice-archive/"
+languageCode = "en-us"
+title = "NICE Archive"
+theme = "hugo-book"
+
+[params]
+  BookTheme = "light"
+  BookSection = "docs"
+  BookSearch = true
+  BookComments = false
+  BookRepo = "https://github.com/minhluannguyen/nice-archive"
+  BookPortableLinks = "warning"
+
+# Keep documentation in the existing repository docs/ directory.
+[[module.mounts]]
+  source = "content"
+  target = "content"
+
+[[module.mounts]]
+  source = "../docs"
+  target = "content/docs"
+  files = [
+    "! agents/**",
+    "! CVE_ORCHESTRATOR_README.md",
+    "! README.md",
+  ]
+
+# The sidebar is curated so the workflow steps appear under their overview.
+[[menu.before]]
+  name = "Getting started"
+  pageRef = "/docs"
+  weight = 1
+
+[[menu.before]]
+  identifier = "reporting"
+  name = "Reporting Tutorial"
+  pageRef = "/docs/reporting-vulnerabilities"
+  weight = 10
+
+[[menu.before]]
+  name = "1. Create or find the case"
+  pageRef = "/docs/reporting/01-create-case"
+  parent = "reporting"
+  weight = 1
+
+[[menu.before]]
+  identifier = "research"
+  name = "2. Research and select software"
+  pageRef = "/docs/reporting/02-research-and-sources"
+  parent = "reporting"
+  weight = 2
+
+[[menu.before]]
+  name = "Upstream and third-party builds"
+  pageRef = "/docs/reporting/upstream-and-third-party-builds"
+  parent = "research"
+  weight = 1
+
+[[menu.before]]
+  name = "3. Design the topology"
+  pageRef = "/docs/reporting/03-design"
+  parent = "reporting"
+  weight = 3
+
+[[menu.before]]
+  name = "4. Write the case entry point"
+  pageRef = "/docs/reporting/04-entry-point"
+  parent = "reporting"
+  weight = 4
+
+[[menu.before]]
+  name = "5. Configure the VMs"
+  pageRef = "/docs/reporting/05-vm-configurations"
+  parent = "reporting"
+  weight = 5
+
+[[menu.before]]
+  name = "6. Explore in scenario mode"
+  pageRef = "/docs/reporting/06-scenario-mode"
+  parent = "reporting"
+  weight = 6
+
+[[menu.before]]
+  name = "7. Write the automated test"
+  pageRef = "/docs/reporting/07-test"
+  parent = "reporting"
+  weight = 7
+
+[[menu.before]]
+  name = "8. Verify the test"
+  pageRef = "/docs/reporting/08-verify-test"
+  parent = "reporting"
+  weight = 8
+
+[[menu.before]]
+  name = "9. Write the case README"
+  pageRef = "/docs/reporting/09-case-readme"
+  parent = "reporting"
+  weight = 9
+
+[[menu.before]]
+  identifier = "guides"
+  name = "Reproduction guides"
+  pageRef = "/docs/guides"
+  weight = 20
+
+[[menu.before]]
+  name = "Vulnerability-specific reproduction"
+  pageRef = "/docs/vulnerability-specific-reproduction"
+  parent = "guides"
+  weight = 1
+
+[[menu.before]]
+  name = "Standalone VMs"
+  pageRef = "/docs/standalone-vms"
+  parent = "guides"
+  weight = 2
+
+[[menu.before]]
+  identifier = "reference"
+  name = "Tools and reference"
+  pageRef = "/docs/reference"
+  weight = 30
+
+[[menu.before]]
+  name = "CLI guide"
+  pageRef = "/docs/cli-tool"
+  parent = "reference"
+  weight = 1
+
+[[menu.before]]
+  name = "NICE helper library"
+  pageRef = "/docs/nice-archive-libs"
+  parent = "reference"
+  weight = 2
+
+[[menu.before]]
+  name = "Reviewing recipes"
+  pageRef = "/docs/reviewing"
+  weight = 40
+
+[[menu.after]]
+  name = "GitHub"
+  url = "https://github.com/minhluannguyen/nice-archive"
+  weight = 10

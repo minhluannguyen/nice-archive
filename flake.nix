@@ -2,7 +2,7 @@
   description = "Run a Python script with nix run";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     nixpkgs-opencode.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     nix-versions.url = "github:denful/nix-versions";
   };
@@ -109,6 +109,10 @@
             export NICE_ARCHIVE_ROOT="$PWD"
             export PATH="$PWD:$PATH"
           '';
+        };
+
+        docs = pkgs.mkShell {
+          packages = [ pkgs.hugo pkgs.git ];
         };
       });
     };

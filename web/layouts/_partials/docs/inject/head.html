@@ -1,0 +1,49 @@
+<script>
+  (() => {
+    const storageKey = "nice-archive-theme";
+    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+    let preference = null;
+
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved === "light" || saved === "dark") preference = saved;
+    } catch (_) {
+      // The switch still works for this page if storage is unavailable.
+    }
+
+    const currentTheme = () => preference || (systemTheme.matches ? "dark" : "light");
+    const applyTheme = () => {
+      const theme = currentTheme();
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+
+      const label = `Switch to ${theme === "dark" ? "light" : "dark"} theme`;
+      document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      });
+    };
+
+    applyTheme();
+    systemTheme.addEventListener("change", () => {
+      if (!preference) applyTheme();
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      applyTheme();
+
+      document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          preference = currentTheme() === "dark" ? "light" : "dark";
+          applyTheme();
+
+          try {
+            localStorage.setItem(storageKey, preference);
+          } catch (_) {
+            // The selection still works for this page if storage is unavailable.
+          }
+        });
+      });
+    });
+  })();
+</script>
