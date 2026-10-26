@@ -3,8 +3,10 @@ let
   mkPair = name: drv:
     "[${name}]=\"${drv.vm}/bin/run-${name}-vm\"";
   arrBody = pkgs.lib.concatStringsSep "\n  " (pkgs.lib.mapAttrsToList mkPair oldKernelVMs);
+  # Only consumed by the interactive display rewrite below. Guard the option
+  # read: historical kernels (e.g. NixOS 16.03) predate `virtualisation.graphics`.
   graphicsBody = pkgs.lib.concatStringsSep "\n  " (pkgs.lib.mapAttrsToList
-    (name: drv: "[${name}]=${if drv.config.virtualisation.graphics then "true" else "false"}")
+    (name: drv: "[${name}]=${if (drv.config.virtualisation ? graphics) && drv.config.virtualisation.graphics then "true" else "false"}")
     oldKernelVMs);
 
 in
@@ -26,9 +28,11 @@ pkgs.runCommand "nixos-old-kernel-test" {
   declare -A oldVM=(
     ${arrBody}
   )
+  ${pkgs.lib.optionalString isInteractive ''
   declare -A oldGraphics=(
     ${graphicsBody}
   )
+  ''}
 
   # Process every VM script in the list
   for orig in $startScripts; do
@@ -64,13 +68,18 @@ pkgs.runCommand "nixos-old-kernel-test" {
     escExec=$(printf '%s\n' "$execLine" | sed 's:[\\/&]:\\&:g')
     escNet=$(printf  '%s\n' "$netLine"  | sed 's:[\\/&]:\\&:g')
 
-    # The driver supplies serial and monitor connections itself. Disable only
-    # the display, without -nographic's implicit serial/monitor redirection.
+    # Non-interactive tests keep the original behaviour: strip -nographic so the
+    # NixOS test driver's own serial/monitor take over. Interactive scenarios
+    # disable only the display, preserving the copied driver's serial wiring.
+    ${if isInteractive then ''
     if [[ "''${oldGraphics[$machine]}" == false ]]; then
       sed -i "s/-nographic/-display none/g" "$dst"
     else
       sed -i "s/-nographic//g" "$dst"
     fi
+    '' else ''
+    sed -i "s/-nographic//g" "$dst"
+    ''}
     sed -i "s#^exec.*#''${escExec}#" "$dst"
     sed -i "s#-net nic.*#''${escNet}#" "$dst"
 
