@@ -1,4 +1,4 @@
-# CVE OpenCode batch orchestrator
+# CVE batch orchestrator
 
 `cve-orchestrator` runs one OpenCode agent job per CVE, using an isolated
 detached Git worktree directory for each CVE. It supports parallel workers,
