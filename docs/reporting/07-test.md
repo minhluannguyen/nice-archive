@@ -20,11 +20,11 @@ status, output = attacker.execute("run-trigger server", timeout=30)
 
 variant = server.succeed("cat /etc/nice-archive/variant", timeout=10).strip()
 if variant == "vulnerable":
-    ab.check_file_contains(server, "/tmp/effect", "NICE-CVE-YYYY-NNNN", timeout=60)
+    ab.assert_file_contains(server, "/tmp/effect", "NICE-CVE-YYYY-NNNN", timeout=60)
 else:
     assert variant == "fixed"
     server.succeed("systemctl is-active example.service", timeout=30)
-    ab.check_file_exists(server, "/tmp/effect", is_existing=False, timeout=60)
+    ab.assert_file_exists(server, "/tmp/effect", is_existing=False, timeout=60)
 ```
 
 The VM module must create the variant file; the generator does not inject that

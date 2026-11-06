@@ -3,14 +3,14 @@
 from .blocks import *
 
 __all__ = [
-    'check_service_log_contains',
-    'check_root_privileges',
-    'check_screen_text',
-    'check_file_contains',
-    'check_file_exists',
-    'check_file_size_equals',
-    'check_cpu_usage_high',
-    'check_memory_usage_high',
-    'check_exact_execution_time',
-    'check_core_dump_exists'
+    'assert_service_log_contains',
+    'assert_root_privileges',
+    'assert_screen_text',
+    'assert_file_contains',
+    'assert_file_exists',
+    'assert_file_size_equals',
+    'assert_cpu_usage_high',
+    'assert_memory_usage_high',
+    'assert_exact_execution_time',
+    'assert_core_dump_exists'
 ]

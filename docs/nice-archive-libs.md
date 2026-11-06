@@ -147,7 +147,7 @@ nice-archive-lib.testsGenerator {
 | `VMs` | No | `{}` | Attribute set of VM definitions. |
 | `system` | No | `"x86_64-linux"` | Nix system for generated outputs. Supported values are `"x86_64-linux"` and `"aarch64-linux"`. |
 | `generateInteractiveTests` | No | `true` | Generate `start-scenario-*` outputs. |
-| `enableOCR` | No | `false` | Enable OCR support in the NixOS test driver. Required for `wait_for_text` and `check_screen_text`. |
+| `enableOCR` | No | `false` | Enable OCR support in the NixOS test driver. Required for `wait_for_text` and `assert_screen_text`. |
 
 ### VM fields
 
@@ -297,7 +297,7 @@ Use OCR assertions from the test script:
 import assertion_blocks as ab
 
 desktop.wait_for_x()
-ab.check_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
+ab.assert_screen_text(desktop, "Hello, you have been pwned!", timeout=60)
 ```
 
 ## `standaloneVMGenerator`
@@ -565,18 +565,18 @@ Available helpers:
 
 | Helper | Purpose |
 | --- | --- |
-| `check_service_log_contains(machine, check_message, unit, failed_message="", timeout=60)` | Wait for text in a systemd unit journal. |
-| `check_root_privileges(machine, user, timeout=90)` | Check that a user has root UID and GID. |
-| `check_screen_text(machine, text, timeout=60)` | Use OCR to wait for text on the VM screen. Requires `enableOCR = true`. |
-| `check_file_exists(machine, file_path, is_existing=True, timeout=90)` | Check that a path exists or remains absent. |
-| `check_file_contains(machine, file_path, content, timeout=90, is_existing=True)` | Check that an existing file contains or omits text. |
-| `check_file_size_equals(machine, file_path, expected_size, timeout=90)` | Check exact file size in bytes. |
-| `check_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90)` | Check that a command exceeds a CPU-time limit. |
-| `check_memory_usage_high(machine, command, maximum_memory_usage, timeout=90)` | Check that a command exceeds an address-space limit. |
-| `check_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5, timeout=90)` | Check average execution time within a tolerance. |
-| `check_core_dump_exists(machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command="", timeout=90)` | Find a matching systemd core dump. |
+| `assert_service_log_contains(machine, check_message, unit, failed_message="", timeout=60)` | Wait for text in a systemd unit journal. |
+| `assert_root_privileges(machine, user, timeout=90)` | Check that a user has root UID and GID. |
+| `assert_screen_text(machine, text, timeout=60)` | Use OCR to wait for text on the VM screen. Requires `enableOCR = true`. |
+| `assert_file_exists(machine, file_path, is_existing=True, timeout=90)` | Check that a path exists or remains absent. |
+| `assert_file_contains(machine, file_path, content, timeout=90, is_existing=True)` | Check that an existing file contains or omits text. |
+| `assert_file_size_equals(machine, file_path, expected_size, timeout=90)` | Check exact file size in bytes. |
+| `assert_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90)` | Check that a command exceeds a CPU-time limit. |
+| `assert_memory_usage_high(machine, command, maximum_memory_usage, timeout=90)` | Check that a command exceeds an address-space limit. |
+| `assert_exact_execution_time(machine, command, expected_time, repeats=5, tolerance=0.5, timeout=90)` | Check average execution time within a tolerance. |
+| `assert_core_dump_exists(machine, unit_name="backdoor.service", expected_signal=None, repeats=10, repeat_command="", timeout=90)` | Find a matching systemd core dump. |
 
-For `check_file_contains`, `is_existing` describes whether the content should
+For `assert_file_contains`, `is_existing` describes whether the content should
 be present. The file itself must exist in both modes. Each helper passes its
 `timeout` to the underlying NixOS test-driver operation; the LLM workflow's
 hard command and test limits still apply independently.
@@ -587,23 +587,23 @@ Use existing cases as models:
 
 | Vulnerability or proof type | Preferred assertion blocks | Model cases |
 | --- | --- | --- |
-| Privilege escalation | `check_root_privileges` | Dirty COW, PwnKit, chwoot |
-| DoS / infinite loop / CPU exhaustion | `check_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
-| Memory exhaustion | `check_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
-| File write, overwrite, deletion, preservation, RCE evidence | `check_file_exists`, `check_file_contains`, `check_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
-| Information disclosure | `check_file_contains`, optionally `check_file_size_equals` | Heartbleed, GitLab secret snippet |
-| Service crash or fatal signal | `check_core_dump_exists`, `check_service_log_contains` | sysstat double free, TensorFlow FPE, curl SASL crash |
-| Log or request exfiltration | `check_service_log_contains`, `check_file_contains` | Early CCS MITM |
-| Browser-executed XSS | Drive a real browser programmatically in headless/non-graphical mode unless visible UI behavior is required; then assert a browser-caused effect with `check_service_log_contains`, `check_file_contains`, or, for genuinely graphical cases, `check_screen_text` | Bleach mutation XSS, Tomcat SSI XSS |
-| Graphical/UI proof | `check_screen_text` | LibreOffice graphical RCE |
-| Timing side channel or delay proof | `check_exact_execution_time` | WordPress SQLi timing-style test |
+| Privilege escalation | `assert_root_privileges` | Dirty COW, PwnKit, chwoot |
+| DoS / infinite loop / CPU exhaustion | `assert_cpu_usage_high` | curl WebSocket loop, OpenSSL BN_mod_sqrt |
+| Memory exhaustion | `assert_memory_usage_high` | Use when the exploit is expected to exceed an address-space limit. |
+| File write, overwrite, deletion, preservation, RCE evidence | `assert_file_exists`, `assert_file_contains`, `assert_file_size_equals` | zgrep file write, curl removes wrong file, Heartbleed dump size/content |
+| Information disclosure | `assert_file_contains`, optionally `assert_file_size_equals` | Heartbleed, GitLab secret snippet |
+| Service crash or fatal signal | `assert_core_dump_exists`, `assert_service_log_contains` | sysstat double free, TensorFlow FPE, curl SASL crash |
+| Log or request exfiltration | `assert_service_log_contains`, `assert_file_contains` | Early CCS MITM |
+| Browser-executed XSS | Drive a real browser programmatically in headless/non-graphical mode unless visible UI behavior is required; then assert a browser-caused effect with `assert_service_log_contains`, `assert_file_contains`, or, for genuinely graphical cases, `assert_screen_text` | Bleach mutation XSS, Tomcat SSI XSS |
+| Graphical/UI proof | `assert_screen_text` | LibreOffice graphical RCE |
+| Timing side channel or delay proof | `assert_exact_execution_time` | WordPress SQLi timing-style test |
 
 ### Privilege escalation example
 
 ```python
 import assertion_blocks as ab
 
-ab.check_root_privileges(server, "newuser", timeout=90)
+ab.assert_root_privileges(server, "newuser", timeout=90)
 ```
 
 ### DoS / CPU exhaustion example
@@ -615,7 +615,7 @@ good models.
 ```python
 import assertion_blocks as ab
 
-ab.check_cpu_usage_high(
+ab.assert_cpu_usage_high(
     client,
     command="start-client",
     maximum_cpu_time_usage="30",
@@ -635,18 +635,18 @@ variant = server.succeed(
     timeout=10,
 ).strip()
 if variant == "vulnerable":
-    ab.check_file_exists(
+    ab.assert_file_exists(
         server, "/tmp/cve-xxxx-pwned", is_existing=True, timeout=90
     )
-    ab.check_file_contains(
+    ab.assert_file_contains(
         server, "/etc/passwd", "super-secret-flag-injected", timeout=90
     )
 else:
     assert variant == "fixed", f"Unknown variant marker: {variant}"
-    ab.check_file_exists(
+    ab.assert_file_exists(
         server, "/tmp/cve-xxxx-pwned", is_existing=False, timeout=90
     )
-    ab.check_file_contains(
+    ab.assert_file_contains(
         server,
         "/etc/passwd",
         "super-secret-flag-injected",
@@ -658,20 +658,20 @@ else:
 ### Information disclosure example
 
 ```python
-ab.check_file_size_equals(attacker, dump_file, dump_length, timeout=90)
-ab.check_file_contains(attacker, dump_file, secret_key, timeout=90)
+ab.assert_file_size_equals(attacker, dump_file, dump_length, timeout=90)
+ab.assert_file_contains(attacker, dump_file, secret_key, timeout=90)
 ```
 
 ### Crash/core-dump example
 
 ```python
-ab.check_service_log_contains(
+ab.assert_service_log_contains(
     machine=server,
     unit="sysstatSetup.service",
     check_message="free(): double free detected",
     timeout=60,
 )
-ab.check_core_dump_exists(
+ab.assert_core_dump_exists(
     machine=server,
     unit_name="sysstatSetup.service",
     expected_signal="ABRT",
@@ -683,7 +683,7 @@ ab.check_core_dump_exists(
 
 ```python
 libreoffice.wait_for_x(timeout=90)
-ab.check_screen_text(
+ab.assert_screen_text(
     libreoffice,
     "Hello, you have been pwned!",
     timeout=60,

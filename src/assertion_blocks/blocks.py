@@ -23,11 +23,11 @@ def _with_timeout(method, *args, timeout):
     return method(*args)
 
 
-def check_service_log_contains(
+def assert_service_log_contains(
     machine, check_message, unit, failed_message="", timeout=60
 ):
     """Check if a service's journalctl log contains a specific message."""
-    print("ASSERTION BLOCK: check_service_log_contains")
+    print("ASSERTION BLOCK: assert_service_log_contains")
     failed_msg_display = (
         f"Error checking journalctl logs for unit {unit}: {failed_message}"
         if failed_message
@@ -42,9 +42,9 @@ def check_service_log_contains(
     assert f"{check_message}" in stdout, failed_msg_display
 
 
-def check_root_privileges(machine, user, timeout=90):
+def assert_root_privileges(machine, user, timeout=90):
     """Check if a user has root privileges."""
-    print("ASSERTION BLOCK: check_root_privileges")
+    print("ASSERTION BLOCK: assert_root_privileges")
     stdout = machine.succeed(f"su - {shlex.quote(user)} -c 'id'", timeout=timeout)
     print(stdout)
     assert (
@@ -53,16 +53,16 @@ def check_root_privileges(machine, user, timeout=90):
     ), f"User {user} does not have root privileges"
 
 
-def check_screen_text(machine, text, timeout=60):
+def assert_screen_text(machine, text, timeout=60):
     """Check if OCR can find text on the machine screen."""
-    print("ASSERTION BLOCK: check_screen_text")
+    print("ASSERTION BLOCK: assert_screen_text")
     _with_timeout(machine.wait_for_text, text, timeout=timeout)
 
 
-def check_file_exists(machine, file_path, is_existing=True, timeout=90):
+def assert_file_exists(machine, file_path, is_existing=True, timeout=90):
     """Check if a file exists or doesn't exist."""
     print(
-        f"ASSERTION BLOCK: check_file_exists (expecting file to be "
+        f"ASSERTION BLOCK: assert_file_exists (expecting file to be "
         f"{'present' if is_existing else 'absent'})"
     )
 
@@ -73,10 +73,10 @@ def check_file_exists(machine, file_path, is_existing=True, timeout=90):
         machine.wait_until_succeeds(f"test ! -e {quoted_path}", timeout=timeout)
 
 
-def check_file_contains(machine, file_path, content, timeout=90, is_existing=True):
+def assert_file_contains(machine, file_path, content, timeout=90, is_existing=True):
     """Check whether an existing file contains or omits specific content."""
     print(
-        f"ASSERTION BLOCK: check_file_contains (expecting content to be "
+        f"ASSERTION BLOCK: assert_file_contains (expecting content to be "
         f"{'present' if is_existing else 'absent'})"
     )
 
@@ -91,9 +91,9 @@ def check_file_contains(machine, file_path, content, timeout=90, is_existing=Tru
     )
 
 
-def check_file_size_equals(machine, file_path, expected_size, timeout=90):
+def assert_file_size_equals(machine, file_path, expected_size, timeout=90):
     """Check if a file has the expected size in bytes."""
-    print("ASSERTION BLOCK: check_file_size_equals")
+    print("ASSERTION BLOCK: assert_file_size_equals")
 
     _with_timeout(machine.wait_for_file, file_path, timeout=timeout)
     stdout = machine.succeed(
@@ -107,9 +107,9 @@ def check_file_size_equals(machine, file_path, expected_size, timeout=90):
     )
 
 
-def check_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90):
+def assert_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90):
     """Check if a command exceeds maximum CPU time usage."""
-    print("ASSERTION BLOCK: check_cpu_usage_high")
+    print("ASSERTION BLOCK: assert_cpu_usage_high")
     res = machine.execute(
         "prlimit --cpu=" + maximum_cpu_time_usage + " " + command,
         timeout=timeout,
@@ -121,9 +121,9 @@ def check_cpu_usage_high(machine, command, maximum_cpu_time_usage, timeout=90):
     )
 
 
-def check_memory_usage_high(machine, command, maximum_memory_usage, timeout=90):
+def assert_memory_usage_high(machine, command, maximum_memory_usage, timeout=90):
     """Check if a command exceeds maximum memory usage."""
-    print("ASSERTION BLOCK: check_memory_usage_high")
+    print("ASSERTION BLOCK: assert_memory_usage_high")
     res = machine.execute(
         "prlimit --as=" + maximum_memory_usage + " " + command,
         timeout=timeout,
@@ -135,11 +135,11 @@ def check_memory_usage_high(machine, command, maximum_memory_usage, timeout=90):
     )
 
 
-def check_exact_execution_time(
+def assert_exact_execution_time(
     machine, command, expected_time, repeats=5, tolerance=0.5, timeout=90
 ):
     """Check if a command executes within expected time frame."""
-    print("ASSERTION BLOCK: check_exact_execution_time")
+    print("ASSERTION BLOCK: assert_exact_execution_time")
 
     times = []
     for _ in range(repeats):
@@ -158,7 +158,7 @@ def check_exact_execution_time(
     )
 
 
-def check_core_dump_exists(
+def assert_core_dump_exists(
     machine,
     unit_name="backdoor.service",
     expected_signal=None,
@@ -167,9 +167,9 @@ def check_core_dump_exists(
     timeout=90,
 ):
     """Check if a core dump exists for a specific unit with expected signal."""
-    print("ASSERTION BLOCK: check_core_dump_exists")
+    print("ASSERTION BLOCK: assert_core_dump_exists")
 
-    def _check_core_dump_exists_internal(
+    def _assert_core_dump_exists_internal(
         machine, unit_name, expected_signal, repeats, repeat_command
     ):
         list_coredumpctl = machine.execute(
@@ -221,7 +221,7 @@ def check_core_dump_exists(
             for attempt in range(repeats):
                 try:
                     print(f"Checking for core dump, attempt {attempt + 1}/{repeats}...")
-                    _check_core_dump_exists_internal(
+                    _assert_core_dump_exists_internal(
                         machine,
                         unit_name,
                         expected_signal,
@@ -236,7 +236,7 @@ def check_core_dump_exists(
                         machine.execute(repeat_command, timeout=timeout)
                     time.sleep(5)
         else:
-            _check_core_dump_exists_internal(
+            _assert_core_dump_exists_internal(
                 machine, unit_name, expected_signal, repeats, repeat_command
             )
             return
