@@ -200,7 +200,7 @@ nice-archive update-flakes --all
 
 ## Documentation
 
-For more detailed information, see the [documentation index](./docs/README.md), which includes getting-started guides, CLI documentation, and technical references for the NICE Archive framework.
+For more detailed information, see the [documentation](https://minhluannguyen.github.io/nice-archive/), which includes getting-started guides, CLI documentation, and technical references for the NICE Archive framework.
 
 ## Agent-based CVE reproduction
 
