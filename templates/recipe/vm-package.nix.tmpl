@@ -1,0 +1,33 @@
+{ config, pkgs, isVulnerable, ... }:
+
+let
+  # Pin both versions and verify hashes.
+  nixpkgsInfo = if isVulnerable then {
+    url = "https://github.com/NixOS/nixpkgs/archive/<vulnerable-commit>.tar.gz";
+    sha256 = "<vulnerable-sha256>";
+  } else {
+    url = "https://github.com/NixOS/nixpkgs/archive/<fixed-commit>.tar.gz";
+    sha256 = "<fixed-sha256>";
+  };
+
+  selectedPkgs = import (builtins.fetchTarball nixpkgsInfo) {
+    system = pkgs.stdenv.hostPlatform.system;
+  };
+  
+  targetPackage = selectedPkgs."TODO-package";
+in {
+  environment.systemPackages = [ targetPackage ];
+
+  # Test branch selector.
+  environment.etc."nice-archive/variant".text =
+    if isVulnerable then "vulnerable\n" else "fixed\n";
+
+  # Network configuration
+  # networking.firewall.allowedTCPPorts = [ 8080 ];
+
+  # Set up service to run the vulnerable/fixed package
+  # systemd.services.target = {
+  #   wantedBy = [ "multi-user.target" ];
+  #   serviceConfig.ExecStart = "$${targetPackage}/bin/TODO --port 8080";
+  # };
+}
