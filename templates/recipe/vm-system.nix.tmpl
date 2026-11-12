@@ -1,0 +1,17 @@
+{ config, pkgs, isVulnerable, ... }:
+
+{
+  environment.systemPackages = with pkgs; [
+    # TODO-packages
+  ];
+
+  # Test branch selector.
+  environment.etc."nice-archive/variant".text =
+    if isVulnerable then "vulnerable\n" else "fixed\n";
+
+  # Network configuration
+  # networking.firewall.allowedTCPPorts = [ 8080 ];
+
+  # TODO: Set up service to run the vulnerable/fixed package
+  # service.<target-service> = { ... };
+}

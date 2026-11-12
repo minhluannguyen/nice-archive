@@ -1,8 +1,8 @@
 # NICE Archive CLI
 
-`nice-archive` lists CVE cases, runs automated tests, opens interactive VM
-scenarios, launches standalone VMs, reports line counts, cleans generated
-artifacts, and updates flake locks. Run it from the
+`nice-archive` initializes recipe templates, lists CVE cases, runs automated
+tests, opens interactive VM scenarios, launches standalone VMs, reports line
+counts, cleans generated artifacts, and updates flake locks. Run it from the
 repository root, where it looks for cases in `./cves/`.
 
 ## Run the CLI
@@ -47,6 +47,7 @@ Use `nice-archive <command> --help` to see a command's options. Running
 | Command | Function |
 | --- | --- |
 | `start` | Open an interactive menu. |
+| `init` (`init-recipe`) | Create a recipe template through an interactive wizard. |
 | `list-cves` | See which CVE cases are available. |
 | `loc-report` (`cve-loc-report`) | Count lines in case VM definitions and tests. |
 | `cleanup` | Remove generated files from one case or all cases. |
@@ -66,6 +67,27 @@ mutually exclusive.
 `test` and `scenario` default to `--vulnerable true`. Set it to `false` for the
 fixed variant. Both support `--system SYSTEM`, which defaults to
 `x86_64-linux` on Linux. Most users can leave this unchanged.
+
+## Initialize a recipe
+
+```bash
+nice-archive init
+nice-archive init --case cve-2024-12345-short-description
+```
+
+Creates `cves/cve-yyyy-nnnn-short-description/` with `flake.nix`, one VM
+module per machine, `test.py`, and `README.md`. Also available from `start`.
+
+Choose a topology (one VM, attacker/target, client/server, several services,
+or custom), a generator, and unique machine names. Each machine has a
+`package`, `system`, or `invariant` variant. Package modules include nixpkgs
+tarball pins; system variants share one vulnerable/fixed nixpkgs pair.
+`oldKernelTestsGenerator` also asks which machines and scenario use the old kernel.
+
+Fill in pins, packages, services, and security assertions using the
+[reporting workflow](./reporting-vulnerabilities.md). The unfinished test
+raises `NotImplementedError`. Existing paths are rejected; `Ctrl+C` cancels
+before writing. Initialization does not fetch inputs, stage files, or boot VMs.
 
 ## Find cases and VMs
 

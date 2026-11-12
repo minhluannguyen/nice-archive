@@ -11,8 +11,11 @@ import os
 import fcntl
 import select
 import signal
+import keyword
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from string import Template
 import time
 import pexpect
 from InquirerPy import inquirer
@@ -73,6 +76,258 @@ LOG_MODES = {LOG_LIVE, LOG_FILE, LOG_NONE}
 SCENARIO_LOCK_ENV = "NICE_ARCHIVE_SCENARIO_LOCK"
 DEFAULT_SCENARIO_LOCK_PATH = USER_DIR / ".nice-archive-scenario.lock"
 DISABLED_SCENARIO_LOCK_VALUES = {"", "0", "false", "off", "none", "disabled"}
+RECIPE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "recipe"
+RECIPE_GENERATORS = ("testsGenerator", "oldKernelTestsGenerator")
+RECIPE_VARIANTS = ("package", "system", "invariant")
+RECIPE_TOPOLOGIES = {
+    "One VM (local flaw)": ("target",),
+    "Attacker and target": ("attacker", "target"),
+    "Client and server": ("client", "server"),
+    "Several services (client, proxy, server)": ("client", "proxy", "server"),
+    "Custom": (),
+}
+RESERVED_MACHINE_NAMES = {
+    "ab", "driver", "machines", "retry", "run_tests", "start_all", "subtest", "test_script",
+    "inherit", "let", "rec", "then",  # Nix keywords not already rejected by Python.
+}
+
+
+def validate_recipe_name(value: str) -> bool | str:
+    """Keep a new recipe in a single, conventionally named case directory."""
+    if re.fullmatch(r"cve-[0-9]{4}-[0-9]{4,}-[a-z0-9]+(?:-[a-z0-9]+)*", value):
+        return True
+    return "Use cve-yyyy-nnnn-short-lowercase-description (no paths)."
+
+
+def validate_machine_name(value: str) -> bool | str:
+    """Names are also used as Python variables by the interactive driver."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", value):
+        return "Use 1–63 lowercase letters, digits, or underscores, starting with a letter."
+    if keyword.iskeyword(value) or value in RESERVED_MACHINE_NAMES:
+        return "This name is reserved by Python, Nix, or the test driver."
+    return True
+
+
+def render_recipe_files(
+    case_name: str,
+    generator: str,
+    machines: dict[str, str],
+    topology: str,
+    old_kernel_machines: list[str] | None = None,
+    old_kernel_vulnerable: bool = True,
+) -> dict[str, str]:
+    """Render an unfinished recipe without fetching pins or running software."""
+    validation = validate_recipe_name(case_name)
+    if validation is not True:
+        raise ValueError(validation)
+    if generator not in RECIPE_GENERATORS:
+        raise ValueError(f"Unknown test generator: {generator}")
+    if not machines:
+        raise ValueError("At least one machine is required.")
+    for name, variant in machines.items():
+        validation = validate_machine_name(name)
+        if validation is not True:
+            raise ValueError(f"Invalid machine name {name!r}: {validation}")
+        if variant not in RECIPE_VARIANTS:
+            raise ValueError(f"Unknown variant for {name}: {variant}")
+
+    old_kernel_machines = old_kernel_machines or []
+    if generator == "oldKernelTestsGenerator":
+        if not old_kernel_machines or not set(old_kernel_machines) <= machines.keys():
+            raise ValueError("Choose at least one defined machine for the old kernel.")
+    elif old_kernel_machines:
+        raise ValueError("Old-kernel machines require oldKernelTestsGenerator.")
+
+    extra_inputs = []
+    output_args = []
+    if "system" in machines.values():
+        extra_inputs.extend([
+            '    nixpkgs-vulnerable.url = "github:NixOS/nixpkgs/<vulnerable-nixpkgs-revision>";',
+            '    nixpkgs-fixed.url = "github:NixOS/nixpkgs/<fixed-nixpkgs-revision>";',
+        ])
+        output_args.extend(["nixpkgs-vulnerable", "nixpkgs-fixed"])
+    old_kernel_settings = []
+    if generator == "oldKernelTestsGenerator":
+        extra_inputs.extend([
+            '    nixpkgs-old.url = "github:NixOS/nixpkgs/<old-kernel-nixpkgs-revision>";',
+        ])
+        output_args.append("nixpkgs-old")
+        old_kernel_settings = [
+            "      oldKernelNixpkgs = nixpkgs-old;",
+            "      oldKernelVMNames = [ " + " ".join(f'"{name}"' for name in old_kernel_machines) + " ];",
+            f"      isVulnerable = {str(old_kernel_vulnerable).lower()};",
+        ]
+
+    vm_definitions = []
+    for name, variant in machines.items():
+        vm_definitions.extend([
+            f"        {name} = {{",
+            f"          configPath = ./vm-{name}.nix;",
+            f'          variant = "{variant}";',
+        ])
+        if variant == "system":
+            vm_definitions.extend([
+                "          nixpkgs = {",
+                "            vulnerable = nixpkgs-vulnerable;",
+                "            fixed = nixpkgs-fixed;",
+                "          };",
+            ])
+        if name in old_kernel_machines:
+            vm_definitions.extend([
+                "          oldKernelGraphics = false;",
+                "          oldKernelRestrictNetwork = null;",
+            ])
+        vm_definitions.append("        };")
+
+    target_machine = next((name for name, variant in machines.items() if variant != "invariant"), next(iter(machines)))
+    trigger_machine = next((name for name, variant in machines.items() if variant == "invariant"), target_machine)
+    values = {
+        "case_name": case_name,
+        "cve_id": "-".join(case_name.split("-")[:3]).upper(),
+        "generator": generator,
+        "topology": topology,
+        "extra_inputs": "\n".join(extra_inputs),
+        "extra_output_args": "".join(f", {name}" for name in output_args),
+        "old_kernel_settings": "\n".join(old_kernel_settings),
+        "vm_definitions": "\n".join(vm_definitions),
+        "readiness_checks": "\n".join(
+            f'{name}.wait_for_unit("multi-user.target", timeout=120)' for name in machines
+        ),
+        "target_machine": target_machine,
+        "trigger_machine": trigger_machine,
+        "machine_table": "\n".join(
+            f"| `{name}` | `{variant}` | {'yes' if name in old_kernel_machines else 'no'} | TODO: role |"
+            for name, variant in machines.items()
+        ),
+        "old_kernel_note": (
+            f"Old kernel: {'vulnerable' if old_kernel_vulnerable else 'fixed'} scenario "
+            f"({', '.join(old_kernel_machines)})."
+            if old_kernel_machines else ""
+        ),
+    }
+
+    def render(filename: str, **extra_values: str) -> str:
+        template = (RECIPE_TEMPLATE_DIR / f"{filename}.tmpl").read_text(encoding="utf-8")
+        return Template(template).substitute(values, **extra_values)
+
+    files = {name: render(name) for name in ("flake.nix", "test.py", "README.md")}
+    for name, variant in machines.items():
+        files[f"vm-{name}.nix"] = render(f"vm-{variant}.nix", machine_name=name)
+    return files
+
+
+class RecipeInitCancelled(Exception):
+    """Leave the wizard before any recipe files are created."""
+
+
+def recipe_answer(prompt):
+    answer = prompt.ask()
+    if answer is None:
+        raise RecipeInitCancelled
+    return answer
+
+
+def initialize_recipe(case_name: str | None = None) -> bool:
+    """Ask for a recipe's topology and generate editable templates."""
+    try:
+        if case_name is None:
+            case_name = recipe_answer(questionary.text(
+                "Recipe directory name (cve-yyyy-nnnn-short-description):",
+                validate=validate_recipe_name,
+            ))
+        validation = validate_recipe_name(case_name)
+        if validation is not True:
+            raise ValueError(validation)
+        case_dir = REPORT_DIR / case_name
+        if case_dir.exists() or case_dir.is_symlink():
+            raise ValueError(f"Recipe path already exists: {case_dir}")
+
+        topology = recipe_answer(questionary.select(
+            "Choose the topology (use the fewest machines that preserve the security boundary):",
+            choices=list(RECIPE_TOPOLOGIES),
+        ))
+        default_names = RECIPE_TOPOLOGIES[topology]
+        if not default_names:
+            count = recipe_answer(questionary.text(
+                "How many machines are needed?",
+                default="2",
+                validate=lambda value: True if re.fullmatch(r"[1-9][0-9]*", value)
+                else "Enter a positive whole number.",
+            ))
+            default_names = tuple(f"machine{index + 1}" for index in range(int(count)))
+
+        generator = recipe_answer(questionary.select(
+            "Which test generator should the recipe use?",
+            choices=[
+                questionary.Choice("testsGenerator — package or system variants (recommended)", value="testsGenerator"),
+                questionary.Choice("oldKernelTestsGenerator — selected guests need a historical kernel", value="oldKernelTestsGenerator"),
+            ],
+        ))
+        machines = {}
+        for index, default_name in enumerate(default_names):
+            def validate_unique_name(value: str) -> bool | str:
+                validation = validate_machine_name(value)
+                if validation is not True:
+                    return validation
+                return "Each machine needs a unique name." if value in machines else True
+
+            name = recipe_answer(questionary.text(
+                f"Name of machine {index + 1}/{len(default_names)}:",
+                default=default_name,
+                validate=validate_unique_name,
+            ))
+            default_variant = "package" if default_name in {"target", "server", "machine1"} else "invariant"
+            machines[name] = recipe_answer(questionary.select(
+                f"Variant for {name}:",
+                choices=[
+                    questionary.Choice("package — switch only the affected package", value="package"),
+                    questionary.Choice("system — switch the whole NixOS pin", value="system"),
+                    questionary.Choice("invariant — identical helper in both variants", value="invariant"),
+                ],
+                default=default_variant,
+            ))
+
+        old_kernel_machines = []
+        old_kernel_vulnerable = True
+        if generator == "oldKernelTestsGenerator":
+            old_kernel_machines = recipe_answer(questionary.checkbox(
+                "Which machines need the old kernel? (Space to select, Enter to continue)",
+                choices=[
+                    questionary.Choice(name, checked=variant != "invariant")
+                    for name, variant in machines.items()
+                ],
+                validate=lambda selected: bool(selected) or "Select at least one machine.",
+            ))
+            old_kernel_vulnerable = recipe_answer(questionary.select(
+                "Which scenario should use the old-kernel machines?",
+                choices=[
+                    questionary.Choice("Vulnerable", value=True),
+                    questionary.Choice("Fixed", value=False),
+                ],
+            ))
+
+        files = render_recipe_files(
+            case_name, generator, machines, topology, old_kernel_machines, old_kernel_vulnerable,
+        )
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        case_dir.mkdir()
+        try:
+            for filename, content in files.items():
+                (case_dir / filename).write_text(content, encoding="utf-8")
+        except (OSError, KeyboardInterrupt):
+            shutil.rmtree(case_dir)
+            raise
+    except (RecipeInitCancelled, KeyboardInterrupt, EOFError):
+        info("Recipe initialization cancelled.")
+        return True
+    except (OSError, ValueError) as exc:
+        error(f"Could not initialize recipe: {exc}")
+
+    success(f"Created recipe template: {case_dir}")
+    for filename in files:
+        print(f"  {filename}")
+    info("Fill in the pins and TODOs; test.py fails until completed.")
+    return True
 
 
 class ScenarioDeadlineExceeded(BaseException):
@@ -1381,6 +1636,7 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
     choice = questionary.select(
         message="What would you like to do?",
         choices=[
+            "Initialize a recipe",
             "Start interactive scenario",
             "Run tests",
             "Run standalone VM machines",
@@ -1393,7 +1649,11 @@ _\_\_\/\/_/_/_ ██╔██╗ ██║██║██║     ████�
         pointer="→",
     ).ask()
     
-    if choice == "Start interactive scenario":
+    if choice == "Initialize a recipe":
+        initialize_recipe()
+        wait_for_enter()
+        show_main_menu()
+    elif choice == "Start interactive scenario":
         start_scenario()
     elif choice == "Run tests":
         run_tests()
@@ -1528,6 +1788,23 @@ def build_parser() -> argparse.ArgumentParser:
         description="Open the interactive NICE Archive menu.",
     )
     start_parser.set_defaults(action="start", print_help_when_empty=False)
+
+    init_parser = commands.add_parser(
+        "init",
+        aliases=["init-recipe"],
+        help="initialize a recipe template interactively",
+        description=(
+            "Create a new recipe under ./cves/ by choosing a topology, test generator, "
+            "and named machines with variants. Existing paths are never overwritten."
+        ),
+    )
+    init_parser.add_argument(
+        "--case",
+        dest="case_name",
+        metavar="NAME",
+        help="new directory name: cve-yyyy-nnnn-short-description (prompted if omitted)",
+    )
+    init_parser.set_defaults(action="init_recipe", print_help_when_empty=False)
 
     list_cves_parser = commands.add_parser(
         "list-cves",
@@ -1782,6 +2059,9 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
         show_main_menu()
         return True
 
+    if action == "init_recipe":
+        return initialize_recipe(args.case_name)
+
     if action == "list_cves":
         return list_cases()
 
@@ -1903,7 +2183,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
 
         return update_flake_case(selected)
 
-    parser.error("choose a command such as start, test, scenario, vm, cleanup, loc-report, update-flakes, list-cves, or list-vms")
+    parser.error("choose a command such as start, init, test, scenario, vm, cleanup, loc-report, update-flakes, list-cves, or list-vms")
 
 def main(argv: list[str] | None = None):
     """Main entry point"""
