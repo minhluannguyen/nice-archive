@@ -78,7 +78,7 @@ nice-archive init --case cve-2024-12345-short-description
 Creates `cves/cve-yyyy-nnnn-short-description/` with `flake.nix`, one VM
 module per machine, `test.py`, and `README.md`. Also available from `start`.
 
-Choose a topology (one VM, attacker/target, client/server, several services,
+Choose a topology (one VM, attacker/target, client/server, proxy services,
 or custom), a generator, and unique machine names. Each machine has a
 `package`, `system`, or `invariant` variant. Package modules include nixpkgs
 tarball pins; system variants share one vulnerable/fixed nixpkgs pair.

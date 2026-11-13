@@ -83,7 +83,7 @@ RECIPE_TOPOLOGIES = {
     "One VM (local flaw)": ("target",),
     "Attacker and target": ("attacker", "target"),
     "Client and server": ("client", "server"),
-    "Several services (client, proxy, server)": ("client", "proxy", "server"),
+    "Proxy services (client, proxy, server)": ("client", "proxy", "server"),
     "Custom": (),
 }
 RESERVED_MACHINE_NAMES = {

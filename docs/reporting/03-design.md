@@ -10,7 +10,7 @@ identical in both variants.
 | One VM | A local flaw needs no separate peer. |
 | Attacker and target | The trigger crosses a host or privilege boundary. |
 | Client and server | A vulnerable client consumes a controlled response, or a vulnerable server handles a client request. |
-| Several services | A proxy, relay, identity provider, database, file server, or browser is part of the security path. |
+| Proxy services | A proxy, relay, identity provider, database, file server, or browser is part of the security path. |
 
 Place a required intermediary on its own VM when its behavior affects the
 flaw. For example, a proxy and backend should be separate if they interpret
