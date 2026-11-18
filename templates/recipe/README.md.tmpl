@@ -1,0 +1,40 @@
+# $cve_id: TODO
+
+- **Software:** TODO
+- **Impact:** TODO security effect
+- **Versions:** TODO vulnerable / fixed
+- **Cause and fix:** TODO
+
+## Topology
+
+`$generator` — $topology
+
+| Machine | Variant | Old kernel | Role |
+| --- | --- | --- | --- |
+$machine_table
+
+$old_kernel_note
+
+## Reproduction
+
+```bash
+nice-archive scenario --case $case_name --vulnerable true --popup false
+nice-archive scenario --case $case_name --vulnerable false --popup false
+nice-archive test --case $case_name --vulnerable true
+nice-archive test --case $case_name --vulnerable false
+```
+
+TODO: guest commands, evidence, and fixed-target health check.
+
+## Results
+
+| Variant | Expected | Observed | Status |
+| --- | --- | --- | --- |
+| Vulnerable | TODO security effect | Not run | not run |
+| Fixed | Effect absent; target healthy | Not run | not run |
+
+## References
+
+- Advisory / fix: TODO
+- Software pins / hashes: TODO
+- Trigger source / author / license / adaptations: TODO

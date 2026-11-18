@@ -1,0 +1,17 @@
+{ config, pkgs, ... }:
+
+let
+  # Add exploit Python script to the system
+  # exploitExec = pkgs.writeScriptBin "attack-script" ''
+  #   #!$${pkgs.python3}/bin/python
+  #   $${builtins.readFile ./exploit/<poc-filename>.py}
+  # '';
+in 
+{
+  # Default packages for triggering the exploit
+  environment.systemPackages = with pkgs; [
+    curl
+    # python3
+    # exploitExec
+  ];
+}

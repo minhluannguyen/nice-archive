@@ -60,7 +60,8 @@ The interactive menu provides access to the main CLI features:
 
 ```text
 ? What would you like to do? (Use arrow keys)
-  → Start interactive scenario
+  → Initialize a recipe
+    Start interactive scenario
     Run tests
     Run standalone VM machines
     Update flakes for CVE cases
@@ -71,6 +72,7 @@ The interactive menu provides access to the main CLI features:
 
 Most CLI functionality is accessible through this menu. You can:
 
+- Initialize a recipe template with a topology, generator, and named machines.
 - Start an interactive scenario to explore a vulnerable environment.
 - Run automated validation tests.
 - Launch standalone VMs.
@@ -79,6 +81,16 @@ Most CLI functionality is accessible through this menu. You can:
 - Remove generated logs and VM artifacts from cases.
 
 If you are outside the development shell, replace `nice-archive` with `nix run . --` when running commands from the repository root.
+
+### Create a recipe template
+
+```bash
+nice-archive init
+```
+
+Choose a topology, generator, and named machines with variants. The wizard
+creates a flake, VM modules, `test.py`, and a README under `cves/`.
+See the [initializer guide](./docs/cli-tool.md#initialize-a-recipe) to fill them in.
 
 ### Run validation tests
 

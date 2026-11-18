@@ -1,0 +1,24 @@
+{
+  description = "Reproduction recipe for $cve_id";
+
+  inputs = {
+    # Base system pin.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nice-archive-lib.url = "../../src";
+$extra_inputs
+  };
+
+  outputs = { nixpkgs, nice-archive-lib$extra_output_args, ... }:
+    nice-archive-lib.$generator {
+      inherit nixpkgs;
+      title = "$case_name";
+      caseDir = ./.;
+      system = "x86_64-linux";
+      testScriptPath = ./test.py;
+$old_kernel_settings
+
+      VMs = {
+$vm_definitions
+      };
+    };
+}
