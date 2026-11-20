@@ -1,0 +1,24 @@
+cff-version: 1.0.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "nice-archive"
+abstract: "NICE Archive is a collection of reproducible vulnerability environments built with Nix. Each recipe provides a declarative setup and automated tests to reproduce and validate known vulnerabilities."
+authors:
+  - family-names: "Nguyễn"
+    given-names: "Minh-Luân"
+repository-code: "https://github.com/minhluannguyen/nice-archive"
+doi: "10.48550/arXiv.2606.00625"
+url: "https://arxiv.org/abs/2606.00625"
+license: MIT
+version: "2.0.0"
+date-released: "2026-11-06"
+keywords:
+  - vulnerability reproduction
+  - reproducibility
+  - functional package management
+  - Nix
+  - NixOS
+  - virtual machines
+  - integration testing
+  - CVE
+
