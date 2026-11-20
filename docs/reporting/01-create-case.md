@@ -6,6 +6,9 @@ does not, do not create a case. Search `cves/` before creating a directory.
 Complete an existing case in place and verify its current claims rather than
 assuming they are correct.
 
+Run `nice-archive init` to create a template, then complete the following steps.
+See the [CLI initializer guide](../cli-tool.md#initialize-a-recipe).
+
 Name a new directory `cves/cve-yyyy-nnnn-short-lowercase-description/`. The
 directory name is the `--case` value used by the CLI. Keep `flake.nix` (or a
 legacy `default.nix`), `test.py`, the case README, and VM configuration files
