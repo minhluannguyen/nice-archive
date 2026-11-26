@@ -94,7 +94,7 @@ let
           isScenario = isInteractive;
           isGraphics = oldKernelIsGraphics;
           isOldKernelVM = true;
-          isRetrictNetwork = value.oldKernelRestrictNetwork or null;
+          restrictNetwork = value.oldKernelRestrictNetwork or null;
           configPath = getConfigPath name value;
           inherit caseDir;
           extraArgs = value.extraArgs or {};

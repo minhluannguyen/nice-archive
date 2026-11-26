@@ -1,4 +1,4 @@
-{ isTest, hostName, isRetrictNetwork ? true, isGraphics }:
+{ isTest, hostName, restrictNetwork ? true, isGraphics }:
 { pkgs, lib, ... }:
 
 let
@@ -6,8 +6,8 @@ let
     lib.optionalAttrs (isGraphics != null) {
       graphics = lib.mkForce isGraphics;
     }
-    // lib.optionalAttrs (isRetrictNetwork != null) {
-      restrictNetwork = isRetrictNetwork;
+    // lib.optionalAttrs (restrictNetwork != null) {
+      restrictNetwork = restrictNetwork;
     };
 in
 {

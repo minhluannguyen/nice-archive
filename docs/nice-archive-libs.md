@@ -101,9 +101,6 @@ The shared VM template adds a minimal baseline:
 - optional `virtualisation.graphics`; and
 - optional `virtualisation.restrictNetwork`.
 
-The current public field is spelled `isRetrictNetwork` in the library. Use
-that exact spelling until the API is migrated.
-
 ## `testsGenerator`
 
 Use `testsGenerator` for ordinary CVE reproductions where vulnerable and fixed
@@ -157,7 +154,7 @@ nice-archive-lib.testsGenerator {
 | `variant` | No | Inferred | `invariant`, `package`, or `system`. |
 | `nixpkgs` | For `system` | — | Vulnerable/fixed nixpkgs pair. |
 | `extraArgs` | No | `{}` | Extra values passed to the VM configuration function. |
-| `isRetrictNetwork` | No | `true` | Value for `virtualisation.restrictNetwork`. |
+| `restrictNetwork` | No | `true` | Value for `virtualisation.restrictNetwork`. |
 | `isGraphics` | No | `false` | Value for `virtualisation.graphics`. |
 | `isOldKernelVM` | No | `false` | Imports the old-kernel backdoor service when true. Usually set by `oldKernelTestsGenerator`. |
 
@@ -355,7 +352,7 @@ standaloneVMs.server-fixed
 | `nixpkgs` | No | Generator `nixpkgs` | Per-VM nixpkgs source. |
 | `hostname` | No | VM attribute name | Guest hostname. |
 | `extraArgs` | No | `{}` | Extra values passed to the VM configuration function. |
-| `isRetrictNetwork` | No | `true` | Value for `virtualisation.restrictNetwork`. |
+| `restrictNetwork` | No | `true` | Value for `virtualisation.restrictNetwork`. |
 | `isGraphics` | No | `false` | Value for `virtualisation.graphics`. |
 | `isOldKernelVM` | No | `false` | Imports the old-kernel backdoor service when true. |
 

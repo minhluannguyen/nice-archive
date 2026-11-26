@@ -1,9 +1,9 @@
-{ isTest, isVulnerable, isScenario ? true, hostName, isGraphics ? false, isOldKernelVM ? false, isRetrictNetwork ? true, configPath, caseDir, extraArgs ? {} }:
+{ isTest, isVulnerable, isScenario ? true, hostName, isGraphics ? false, isOldKernelVM ? false, restrictNetwork ? true, configPath, caseDir, extraArgs ? {} }:
 { config, pkgs, lib, modulesPath, ... }:
 
 let
   templateMinimal = import ./vm-minimal.nix {
-    inherit isTest hostName isRetrictNetwork isGraphics;
+    inherit isTest hostName restrictNetwork isGraphics;
   };
   # Handle both absolute paths and relative paths
   defaultConfigPath = if builtins.isPath configPath then
