@@ -129,6 +129,7 @@ and prints a pass/fail summary.
 | `--vulnerable true\|false` | Test the vulnerable version (default) or the fixed version. |
 | `--system SYSTEM` | Choose the operating system and processor architecture to run; the Linux default is `x86_64-linux`. |
 | `--refresh` | Recheck source information before a single-case test; all-case tests do this automatically. |
+| `--interactive` | Run the test with its VM displays visible. Only for one case with a graphical VM. |
 | `--log MODE [FILE]` | Choose whether test output is saved, shown live, or hidden. |
 | `--no-prompt` | Show an error if no case was given instead of opening a selection menu. |
 
@@ -149,6 +150,29 @@ printed. Other choices are:
 
 The `start` menu uses `live` for one case and `none` for all cases. A custom
 filename is only valid with `--log file`.
+
+### Watch a graphical test
+
+Normal tests are headless, even for cases whose VMs set `isGraphics = true`:
+the test driver runs QEMU without a display. To watch such a test, run it
+interactively:
+
+```bash
+nice-archive test --case cve-2022-32278-graphical-libreoffice-rce --interactive
+```
+
+The CLI starts the case's `test-interactive-vulnerable-<true|false>-<system>`
+output, which is the normal test script on the interactive test driver. Graphical
+VMs open a display window. Once the driver's Python REPL is ready, the CLI
+calls `test_script()`. When the test finishes, whether it passed or failed, the
+CLI exits the REPL, which stops the VMs, and then reports the result.
+
+In the `start` menu, choosing **Run tests** on a case with a graphical VM asks
+whether to run it headless or interactively. Interactive runs always show output
+live; with `--log file` (the CLI default), the transcript is also saved as
+`<case>/test-interactive-vulnerable-<true|false>-<system>.log`. The library
+generates these outputs only for cases with a graphical VM; `--interactive` on
+other cases, or with `--all`, is an error.
 
 ## Optional shared phase clocks
 

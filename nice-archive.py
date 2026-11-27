@@ -10,6 +10,7 @@ import shlex
 import os
 import fcntl
 import select
+import shutil
 import signal
 from contextlib import contextmanager
 from pathlib import Path
@@ -73,6 +74,9 @@ LOG_MODES = {LOG_LIVE, LOG_FILE, LOG_NONE}
 SCENARIO_LOCK_ENV = "NICE_ARCHIVE_SCENARIO_LOCK"
 DEFAULT_SCENARIO_LOCK_PATH = USER_DIR / ".nice-archive-scenario.lock"
 DISABLED_SCENARIO_LOCK_VALUES = {"", "0", "false", "off", "none", "disabled"}
+TEST_DRIVER_READY_TEXT = "additionally exposed symbols:"
+INTERACTIVE_TEST_PASSED = "__NICE_INTERACTIVE_TEST_PASSED__"
+INTERACTIVE_TEST_FAILED = "__NICE_INTERACTIVE_TEST_FAILED__"
 
 
 class ScenarioDeadlineExceeded(BaseException):
@@ -259,6 +263,25 @@ def prompt_vulnerability() -> bool | None:
 
     return choice == "Vulnerable"
 
+def prompt_interactive_test() -> bool | None:
+    """Prompt for a headless or interactive run of a graphical case's test."""
+    choice = questionary.select(
+        message="This case has a graphical VM. Run the test headless or with VM displays?",
+        choices=[
+            "Headless",
+            "Show VM displays",
+            "Cancel",
+        ],
+        qmark="?",
+        pointer="→",
+        default="Headless",
+    ).ask()
+
+    if choice is None or choice == "Cancel":
+        return None
+
+    return choice != "Headless"
+
 def get_start_point(case_dir: Path) -> str:
     """Return the Nix entry point type for a case."""
     if (case_dir / "flake.nix").exists():
@@ -278,6 +301,7 @@ def test_log_path(
     isVulnerable: bool,
     system: str,
     filename: str | None = None,
+    kind: str = "test",
 ) -> Path:
     """Return the path where a test log should be saved."""
     if filename:
@@ -286,7 +310,7 @@ def test_log_path(
 
     vulnerable_str = "true" if isVulnerable else "false"
     safe_system = system.replace("/", "-")
-    return case_dir / f"test-vulnerable-{vulnerable_str}-{safe_system}.log"
+    return case_dir / f"{kind}-vulnerable-{vulnerable_str}-{safe_system}.log"
 
 def format_command(command: list[str | Path]) -> str:
     """Return a shell-readable command string for logs."""
@@ -480,6 +504,7 @@ def run_single_test(
     log_mode: str = LOG_FILE,
     log_file: str | None = None,
     system: str = systemStr,
+    interactive: bool = False,
 ) -> bool:
     """Run test for a single case"""
     if log_mode not in LOG_MODES:
@@ -500,7 +525,25 @@ def run_single_test(
         return False
 
     start_point = get_start_point(case_dir)
-    
+
+    if interactive:
+        passed = run_interactive_test(
+            case_dir,
+            isVulnerable=isVulnerable,
+            start_point=start_point,
+            refresh=refresh,
+            log_path=(
+                test_log_path(case_dir, isVulnerable, system, filename=log_file, kind="test-interactive")
+                if log_mode == LOG_FILE
+                else None
+            ),
+            system=system,
+            timeout=test_remaining,
+        )
+        if pause:
+            wait_for_enter()
+        return passed
+
     vulnerable_str = "true" if isVulnerable else "false"
     log_path = test_log_path(case_dir, isVulnerable, system, filename=log_file)
     log_parts: list[str] = []
@@ -578,6 +621,165 @@ def run_single_test(
 
     return passed
 
+def interactive_test_attr(isVulnerable: bool, system: str = systemStr) -> str:
+    """Return the Nix output name of a case's interactive test driver."""
+    vulnerable_str = "true" if isVulnerable else "false"
+    return f"test-interactive-vulnerable-{vulnerable_str}-{system}"
+
+def has_interactive_test(case_dir: Path, isVulnerable: bool, system: str = systemStr) -> bool:
+    """Return whether a case provides an interactive test driver.
+
+    The NICE Archive library generates it only for cases with a graphical VM.
+    """
+    attr = interactive_test_attr(isVulnerable, system)
+
+    if get_start_point(case_dir) == "flake":
+        git_add_case(case_dir)
+        # --apply ignores the value, so this only resolves the attribute path.
+        command = ["nix", "eval", f".#{attr}", "--apply", "_: true"]
+    else:
+        command = [
+            "nix-instantiate", "--eval", "--expr",
+            f"builtins.hasAttr {json.dumps(attr)} (import ./default.nix)",
+        ]
+
+    result = subprocess.run(command, cwd=case_dir, capture_output=True, text=True)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+class TeeWriter:
+    """Write pexpect output to several text streams."""
+
+    def __init__(self, *streams):
+        self.streams = [stream for stream in streams if stream is not None]
+
+    def write(self, data: str):
+        for stream in self.streams:
+            stream.write(data)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+def interactive_test_command() -> str:
+    """Return one REPL line that runs test_script() and prints a result marker.
+
+    The markers are built by concatenation so that the REPL's echo of this
+    line never contains them.
+    """
+    passed_head, passed_tail = INTERACTIVE_TEST_PASSED[:-8], INTERACTIVE_TEST_PASSED[-8:]
+    failed_head, failed_tail = INTERACTIVE_TEST_FAILED[:-8], INTERACTIVE_TEST_FAILED[-8:]
+    source = (
+        "try:\n"
+        "    test_script()\n"
+        "except Exception:\n"
+        "    import traceback\n"
+        "    traceback.print_exc()\n"
+        f"    print({failed_head!r} + {failed_tail!r}, flush=True)\n"
+        "else:\n"
+        f"    print({passed_head!r} + {passed_tail!r}, flush=True)\n"
+    )
+    return f"exec({source!r})"
+
+def run_interactive_test(
+    case_dir: Path,
+    isVulnerable: bool,
+    start_point: str,
+    refresh: bool = False,
+    log_path: Path | None = None,
+    system: str = systemStr,
+    timeout: float | None = None,
+) -> bool:
+    """Run the case's test script on the interactive driver, then exit its REPL."""
+    case_name = case_dir.name
+    attr = interactive_test_attr(isVulnerable, system)
+    refresh_args = ["--refresh"] if refresh else []
+
+    if start_point == "flake":
+        git_add_case(case_dir)
+        command = ["nix", "run", *refresh_args, f".#{attr}"]
+    else:
+        build_command = ["nix-build", "default.nix", "-A", attr]
+        info(f"Running command: {format_command(build_command)}")
+        if subprocess.run(build_command, cwd=case_dir).returncode != 0:
+            warning(f"Could not build the interactive test driver for {case_name}")
+            return False
+        command = ["./result/bin/nixos-test-driver"]
+
+    transcript = None
+    child = None
+    passed = False
+    try:
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            transcript = log_path.open("w", encoding="utf-8", errors="replace", buffering=1)
+            info(f"Interactive test transcript: {log_path}")
+
+        info(f"Running command: {format_command(command)}")
+        columns, lines = shutil.get_terminal_size()
+        child = pexpect.spawn(
+            command[0],
+            command[1:],
+            cwd=str(case_dir),
+            encoding="utf-8",
+            codec_errors="replace",
+            echo=False,
+            dimensions=(lines, columns),
+        )
+        child.logfile_read = TeeWriter(sys.stdout, transcript)
+
+        # Building and booting can take a long time; Ctrl+C aborts.
+        if child.expect_exact(
+            [TEST_DRIVER_READY_TEXT, pexpect.EOF],
+            timeout=None,
+            searchwindowsize=4096,
+        ) != 0:
+            warning(f"The interactive test driver for {case_name} exited before its REPL started")
+            return False
+
+        info("Test driver REPL ready; running test_script()...")
+        child.sendline(interactive_test_command())
+        try:
+            outcome = child.expect_exact(
+                [INTERACTIVE_TEST_PASSED, INTERACTIVE_TEST_FAILED, pexpect.EOF],
+                timeout=timeout,
+                searchwindowsize=4096,
+            )
+        except pexpect.TIMEOUT:
+            warning("The automated-test phase ran out while test_script() was running")
+            child.sendintr()
+            stop_scenario_child(child)
+            return False
+
+        # Leave the REPL whatever the result; the driver stops the VMs on exit.
+        if outcome != 2:
+            print()
+            info("test_script() finished; exiting the test driver and stopping the VMs...")
+            stop_scenario_child(child)
+
+        print()
+        if outcome == 0:
+            success(f"Interactive test passed: {case_name}")
+            passed = True
+        elif outcome == 1:
+            warning(f"Interactive test failed: {case_name} (traceback above)")
+        else:
+            warning(f"The interactive test driver for {case_name} exited during test_script()")
+        return passed
+    except KeyboardInterrupt:
+        warning("Interrupted; stopping the interactive test VMs...")
+        if child is not None and child.isalive():
+            child.sendintr()
+            stop_scenario_child(child)
+        return False
+    except Exception as e:
+        error(f"Error running interactive test: {e}")
+    finally:
+        if child is not None and child.isalive():
+            child.close(force=True)
+        if transcript is not None:
+            transcript.close()
+            info(f"Interactive test log saved to: {log_path}")
+
 def run_all_tests(
     isVulnerable: bool = True,
     pause: bool = False,
@@ -641,6 +843,15 @@ def run_tests():
         show_main_menu()
         return
 
+    interactive = False
+    if selected != ALL_CASES:
+        info("Checking whether the case has a graphical VM...")
+        if has_interactive_test(selected, is_vulnerable):
+            interactive = prompt_interactive_test()
+            if interactive is None:
+                show_main_menu()
+                return
+
     if selected == ALL_CASES:
         run_all_tests(
             isVulnerable=is_vulnerable,
@@ -653,6 +864,7 @@ def run_tests():
             isVulnerable=is_vulnerable,
             pause=True,
             log_mode=LOG_LIVE,
+            interactive=interactive,
         )
 
     show_main_menu()
@@ -1586,7 +1798,9 @@ def build_parser() -> argparse.ArgumentParser:
   --log none              suppress test output and do not create a log file
 
 CLI test runs default to "--log file". In the interactive menu, single-case
-tests use live logging and all-case runs suppress test output.""",
+tests use live logging and all-case runs suppress test output. With
+--interactive, output is always shown live; "--log file" also saves a
+transcript.""",
     )
     add_case_args(test_parser, include_all=True)
     add_vulnerability_arg(test_parser)
@@ -1596,6 +1810,14 @@ tests use live logging and all-case runs suppress test output.""",
         "--refresh",
         action="store_true",
         help="pass --refresh to nix run",
+    )
+    test_parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "run the test script on the interactive driver so graphical VMs show their "
+            "display; only for cases with a graphical VM"
+        ),
     )
     test_parser.add_argument(
         "--log",
@@ -1859,12 +2081,20 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
         )
 
         if selected == ALL_CASES:
+            if args.interactive:
+                parser.error("--interactive runs one case; it cannot be combined with --all")
             return run_all_tests(
                 isVulnerable=cli_vulnerability(args),
                 refresh=True,
                 log_mode=log_mode,
                 log_file=log_file,
                 system=args.system,
+            )
+
+        if args.interactive and not has_interactive_test(selected, cli_vulnerability(args), args.system):
+            error(
+                f"{selected.name} has no {interactive_test_attr(cli_vulnerability(args), args.system)} "
+                "output; interactive tests are generated only for cases with a graphical VM"
             )
 
         return run_single_test(
@@ -1874,6 +2104,7 @@ def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bool:
             log_mode=log_mode,
             log_file=log_file,
             system=args.system,
+            interactive=args.interactive,
         )
 
     if action == "vm":

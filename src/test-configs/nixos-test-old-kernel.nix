@@ -1,12 +1,20 @@
-{ pkgs, oldKernelVMs, testBase, isInteractive ? false, ... }:
+# isInteractive: an interactive scenario (SSH backdoor over vsock).
+# useInteractiveDriver: copy testBase.driverInteractive (full QEMU, Python REPL)
+#   and keep the display of graphical old-kernel VMs.
+# vmGraphics: optional per-VM graphics flags; null or missing entries fall back
+#   to the VM's own virtualisation.graphics.
+{ pkgs, oldKernelVMs, testBase, isInteractive ? false, useInteractiveDriver ? isInteractive, vmGraphics ? {}, ... }:
 let
   mkPair = name: drv:
     "[${name}]=\"${drv.vm}/bin/run-${name}-vm\"";
   arrBody = pkgs.lib.concatStringsSep "\n  " (pkgs.lib.mapAttrsToList mkPair oldKernelVMs);
   # Only consumed by the interactive display rewrite below. Guard the option
   # read: historical kernels (e.g. NixOS 16.03) predate `virtualisation.graphics`.
+  isGraphicalVM = name: drv:
+    if (vmGraphics.${name} or null) != null then vmGraphics.${name}
+    else (drv.config.virtualisation ? graphics) && drv.config.virtualisation.graphics;
   graphicsBody = pkgs.lib.concatStringsSep "\n  " (pkgs.lib.mapAttrsToList
-    (name: drv: "[${name}]=${if (drv.config.virtualisation ? graphics) && drv.config.virtualisation.graphics then "true" else "false"}")
+    (name: drv: "[${name}]=${if isGraphicalVM name drv then "true" else "false"}")
     oldKernelVMs);
 
 in
@@ -17,7 +25,7 @@ pkgs.runCommand "nixos-old-kernel-test" {
   mkdir -p "$outBin"
 
   driverPath=$outBin/nixos-test-driver
-  cp ${if isInteractive then testBase.driverInteractive else testBase.driver}/bin/nixos-test-driver "$driverPath"
+  cp ${if useInteractiveDriver then testBase.driverInteractive else testBase.driver}/bin/nixos-test-driver "$driverPath"
   chmod +xw "$driverPath"
 
   startScripts=$(grep '^export startScripts=' "$driverPath" | sed -E "s/export startScripts=['\"]([^'\"]*)['\"]/\\1/")
@@ -28,7 +36,7 @@ pkgs.runCommand "nixos-old-kernel-test" {
   declare -A oldVM=(
     ${arrBody}
   )
-  ${pkgs.lib.optionalString isInteractive ''
+  ${pkgs.lib.optionalString useInteractiveDriver ''
   declare -A oldGraphics=(
     ${graphicsBody}
   )
@@ -69,9 +77,9 @@ pkgs.runCommand "nixos-old-kernel-test" {
     escNet=$(printf  '%s\n' "$netLine"  | sed 's:[\\/&]:\\&:g')
 
     # Non-interactive tests keep the original behaviour: strip -nographic so the
-    # NixOS test driver's own serial/monitor take over. Interactive scenarios
+    # NixOS test driver's own serial/monitor take over. Interactive drivers
     # disable only the display, preserving the copied driver's serial wiring.
-    ${if isInteractive then ''
+    ${if useInteractiveDriver then ''
     if [[ "''${oldGraphics[$machine]}" == false ]]; then
       sed -i "s/-nographic/-display none/g" "$dst"
     else

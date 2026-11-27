@@ -22,6 +22,7 @@ let
   scenario = if isVulnerable then "true" else "false";
   testOutputName = "test-vulnerable-${scenario}-${system}";
   interactiveOutputName = "start-scenario-vulnerable-${scenario}-${system}";
+  interactiveTestOutputName = "test-interactive-vulnerable-${scenario}-${system}";
 
   normalizeNixpkgsSource = src:
     if builtins.isAttrs src && src ? outPath then src.outPath
@@ -40,6 +41,16 @@ let
     if value ? variant then value.variant
     else if value ? nixpkgs then "system"
     else "invariant";
+
+  getOldKernelGraphics = value:
+    if value ? oldKernelGraphics then value.oldKernelGraphics
+    else if value ? isGraphics then value.isGraphics
+    else false;
+
+  # A graphical VM on either kernel enables the test-interactive-* outputs.
+  hasGraphicalVM = lib.any
+    (value: (value.isGraphics or false) == true || (value.oldKernelGraphics or false) == true)
+    (lib.attrValues VMs);
 
   getOldKernelNixpkgs = name: value:
     let
@@ -71,6 +82,7 @@ let
       enableOCR
       ;
     VMs = baseVMs;
+    generateInteractiveTestDrivers = hasGraphicalVM;
   };
 
   mkOldKernelVM = isInteractive: name:
@@ -81,10 +93,7 @@ let
       vmIsVulnerable =
         if variant == "invariant" then null
         else isVulnerable;
-      oldKernelIsGraphics =
-        if value ? oldKernelGraphics then value.oldKernelGraphics
-        else if value ? isGraphics then value.isGraphics
-        else false;
+      oldKernelIsGraphics = getOldKernelGraphics value;
     in
       import "${oldNixpkgs}/nixos" {
         configuration = import ./vm-configs/vm-template-instance.nix {
@@ -118,6 +127,18 @@ let
     testBase.driverInteractive = baseOutputs.${interactiveOutputName};
     isInteractive = true;
   };
+
+  # The real test script on the interactive driver. The old-kernel VMs are
+  # built as test VMs (no SSH backdoor), and their display is kept only when
+  # they are graphical.
+  interactiveTestDriver = oldKernelNixosTest {
+    inherit pkgs;
+    oldKernelVMs = mkOldKernelVMs false;
+    testBase.driverInteractive = baseOutputs.${interactiveTestOutputName};
+    isInteractive = false;
+    useInteractiveDriver = true;
+    vmGraphics = lib.genAttrs oldKernelVMNames (name: getOldKernelGraphics (getVM name));
+  };
   # Drop the buildable test derivations inherited from baseOutputs: they run
   # against the modern base kernel, not the old vulnerable one, so building
   # them would exercise the wrong kernel. Old-kernel cases run via the patched
@@ -134,4 +155,7 @@ baseWithoutBuildTests
 }
 // lib.optionalAttrs generateInteractiveTests {
   ${interactiveOutputName} = interactiveDriver;
+}
+// lib.optionalAttrs hasGraphicalVM {
+  ${interactiveTestOutputName} = interactiveTestDriver;
 }

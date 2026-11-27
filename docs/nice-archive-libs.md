@@ -53,6 +53,22 @@ start-scenario-vulnerable-false-x86_64-linux
 The `start-scenario-*` outputs are omitted when
 `generateInteractiveTests = false`.
 
+When at least one VM sets `isGraphics = true` (or, for
+`oldKernelTestsGenerator`, `oldKernelGraphics = true`), both generators also
+produce:
+
+```text
+test-interactive-vulnerable-true-x86_64-linux
+test-interactive-vulnerable-false-x86_64-linux
+```
+
+These run the case's real test script on the `driverInteractive` driver. It uses
+the full QEMU build, so graphical VMs show their display. The `.driver` used by
+`test-vulnerable-*` runs on the display-less `qemu_test`. The driver starts in a
+Python REPL, where `test_script()` runs the test. `nice-archive test
+--interactive` uses these outputs, and the CLI detects whether a case supports
+interactive tests by whether the outputs exist.
+
 The NICE Archive CLI expects these names first and falls back to legacy
 `testVulnerableTrue` / `testVulnerableFalse` outputs only for older cases.
 
@@ -144,6 +160,7 @@ nice-archive-lib.testsGenerator {
 | `VMs` | No | `{}` | Attribute set of VM definitions. |
 | `system` | No | `"x86_64-linux"` | Nix system for generated outputs. Supported values are `"x86_64-linux"` and `"aarch64-linux"`. |
 | `generateInteractiveTests` | No | `true` | Generate `start-scenario-*` outputs. |
+| `generateInteractiveTestDrivers` | No | `null` | Generate `test-interactive-*` outputs; `null` generates them only when a VM sets `isGraphics = true`. |
 | `enableOCR` | No | `false` | Enable OCR support in the NixOS test driver. Required for `wait_for_text` and `assert_screen_text`. |
 
 ### VM fields
@@ -439,7 +456,8 @@ nice-archive-lib.oldKernelTestsGenerator {
 
 When `isVulnerable = true`, the old-kernel driver replaces
 `test-vulnerable-true-${system}` and, if enabled,
-`start-scenario-vulnerable-true-${system}`. Set `isVulnerable = false` when
+`start-scenario-vulnerable-true-${system}` and
+`test-interactive-vulnerable-true-${system}`. Set `isVulnerable = false` when
 the fixed scenario should use the old-kernel machines.
 
 ### Arguments
